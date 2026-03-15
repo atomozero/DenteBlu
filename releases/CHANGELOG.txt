@@ -1,0 +1,65 @@
+DenteBlu — Release History
+==========================
+
+r007  2026-03-15  Profili audio + fix driver Intel + install robusto
+  - A2DP Source: streaming audio SBC verso cuffie BT (SbcEncoder + A2dpSource)
+  - AVRCP Target: comandi tasti cuffie (play/pause/stop/volume)
+  - HFP Audio Gateway: ruolo "telefono" per cuffie HF (AT responder)
+  - SCO Audio: trasporto voce bidirezionale (ScoSocket + HCI sync commands)
+  - bluetooth_audio media add-on (BBufferConsumer per Media Kit)
+  - SDP records: A2DP Source (0x110A), AVRCP Target (0x110C), HFP AG (0x111F)
+  - Fix driver Intel h2generic: device bootloader falliti non vengono piu'
+    registrati — elimina loop infinito retry/device_table_full nel syslog
+  - Fix firmware naming per Intel legacy (hw_variant >= 0x11):
+    formato corretto a 3 componenti ibt-<hw_variant>-<hw_revision>-<fw_revision>.sfi
+    (es. ibt-19-0-4.sfi per AX201 Tiger Lake/HarrisonPeak)
+  - install.sh completamente riscritto:
+    * --check: diagnostica completa (hardware, firmware, syslog errors)
+    * --firmware-only: scarica solo firmware Intel
+    * Auto-download firmware Intel durante installazione
+    * Mappa USB product ID per auto-detect senza syslog
+    * Validazione dimensione file scaricati (no pagine 404)
+  - install.sh: fix backup .bak dei driver — Haiku devfs carica qualsiasi
+    file in drivers/bin/, quindi h2generic.bak veniva caricato come secondo
+    driver con retry counter separato. Ora usa .prev e rimuove vecchi .bak
+  - download_intel_fw.sh: fix `local` fuori funzione, flag --auto,
+    validazione file, fallback USB product ID, detect formato 3-componenti
+  - Nuovi test: bt_sco_test, bt_a2dp_source_test, bt_avrcp_test, bt_hfp_ag_test
+
+r006  2026-03-14  Fix SDP Services "Command Disallowed" + syslog cleanup
+  - SDP Services: Inquiry Cancel prima di Create Connection — risolve
+    "General system error" quando si clicca Services durante un'inquiry
+  - SDP Services: errore HCI reale mostrato nell'UI (es. "Page Timeout
+    (HCI 0x04)") al posto di "General system error" generico
+  - Modulo kernel hci: rimosso falso "Connection Thread error" nel syslog
+    (era stampato incondizionatamente ad ogni boot, non era un vero errore)
+
+r005  2026-03-14  BluetoothSendFile + Deskbar add-on + install migliorato
+  - BluetoothSendFile: app standalone per invio file via OPP
+  - Deskbar replicant separato (add-on leggero, no dipendenza libbluetooth)
+  - Menu Deskbar: "Send file...", "Settings...", "Quit"
+  - install.sh migliorato: controlli pre-install, backup, verifica,
+    modalita' --check, registrazione MIME per DeskbarReplicant
+  - btintel Secure Send fire-and-forget (fix AX201/AX211 timeout)
+
+r004  2026-03-14  Stack completo + fix Intel Secure Send
+  - btintel: skip vendor events (0xFF) durante Secure Send firmware
+    download — fix AX201/AX211 che fallivano con "event too short"
+  - OPP: RFCOMM MTU fino a 4096, L2CAP MTU 4096 per PSM RFCOMM
+  - OBEX Disconnect fire-and-forget (no hang 60s)
+  - bt_intel_test: 53 test standalone per TLV parser e filename gen
+  - Pacchetto completo: server, lib, kernel modules, driver, preferences
+  - README in 9 lingue (EN, IT, DE, FR, ES, PT, ZH, RU, UK)
+
+r003  2026-03-13  Pacchetto Intel BT firmware loader
+  - btintel: TLV parser, Secure Send, IML, DDC
+  - Solo driver h2generic + firmware download script
+
+r002  2026-03-12  btintel + firmware files
+  - Driver h2generic con supporto Intel base
+  - Firmware .sfi files inclusi
+
+r001  2026-03-11  Prima release stack Bluetooth
+  - SPP, PBAP, OPP, BLE scan
+  - bluetooth_server, libbluetooth.so, kernel modules
+  - Preferenze Bluetooth con GUI

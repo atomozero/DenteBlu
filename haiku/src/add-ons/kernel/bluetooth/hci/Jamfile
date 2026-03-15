@@ -1,0 +1,27 @@
+SubDir HAIKU_TOP src add-ons kernel bluetooth hci ;
+
+UsePrivateKernelHeaders ;
+UsePrivateHeaders net bluetooth ;
+UsePrivateHeaders [ FDirName kernel arch $(TARGET_KERNEL_ARCH_DIR) ] ;
+#UsePrivateHeaders [ FDirName kernel boot platform $(TARGET_KERNEL_PLATFORM) ] ;
+
+# disable debug output, if debugging is disabled
+if $(DEBUG) = 0 {
+	SubDirCcFlags [ FDefines DEBUG_MAX_LEVEL_FLOW=0 DEBUG_MAX_LEVEL_INFO=0 ] ;
+}
+
+SEARCH_SOURCE += [ FDirName $(HAIKU_TOP) src add-ons kernel bluetooth att ] ;
+SubDirHdrs [ FDirName $(HAIKU_TOP) src add-ons kernel bluetooth att ] ;
+
+SEARCH_SOURCE += [ FDirName $(HAIKU_TOP) src add-ons kernel bluetooth smp ] ;
+SubDirHdrs [ FDirName $(HAIKU_TOP) src add-ons kernel bluetooth smp ] ;
+
+KernelAddon hci :
+	bluetooth.cpp
+	acl.cpp
+	AttChannel.cpp
+	GattClient.cpp
+	SmpManager.cpp
+	smp_crypto.cpp
+	p256.cpp
+;

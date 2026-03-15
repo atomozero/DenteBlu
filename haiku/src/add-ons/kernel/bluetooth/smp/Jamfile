@@ -1,0 +1,10 @@
+SubDir HAIKU_TOP src add-ons kernel bluetooth smp ;
+
+UsePrivateKernelHeaders ;
+UsePrivateHeaders net bluetooth ;
+
+KernelAddon bt_smp :
+	SmpManager.cpp
+	smp_crypto.cpp
+	p256.cpp
+	;

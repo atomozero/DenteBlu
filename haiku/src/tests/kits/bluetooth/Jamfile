@@ -1,0 +1,193 @@
+SubDir HAIKU_TOP src tests kits bluetooth ;
+
+AddSubDirSupportedPlatforms libbe_test ;
+
+UsePrivateHeaders bluetooth shared net kernel ;
+
+SEARCH_SOURCE += [ FDirName $(TOP) src kits bluetooth ] ;
+SEARCH_SOURCE += [ FDirName $(TOP) src servers bluetooth ] ;
+
+SimpleTest ble_scan :
+	ble_scan.cpp
+	: be libbluetooth.so [ TargetLibsupc++ ]
+;
+
+SimpleTest ble_connect :
+	ble_connect.cpp
+	: be libbluetooth.so [ TargetLibsupc++ ]
+;
+
+SimpleTest ble_pair :
+	ble_pair.cpp
+	: be libbluetooth.so [ TargetLibsupc++ ]
+;
+
+SimpleTest bt_sdp_query :
+	bt_sdp_query.cpp
+	: be libbluetooth.so network [ TargetLibsupc++ ]
+;
+
+SimpleTest bt_keystore_test :
+	bt_keystore_test.cpp
+	BluetoothKeyStore.cpp
+	: be [ TargetLibsupc++ ]
+;
+
+SimpleTest bt_hci_le_cmd_test :
+	bt_hci_le_cmd_test.cpp
+	: be [ TargetLibsupc++ ]
+;
+
+SimpleTest bt_ltk_persist_test :
+	bt_ltk_persist_test.cpp
+	BluetoothKeyStore.cpp
+	: be [ TargetLibsupc++ ]
+;
+
+SimpleTest bt_key_e2e_test :
+	bt_key_e2e_test.cpp
+	BluetoothKeyStore.cpp
+	: be [ TargetLibsupc++ ]
+;
+
+SimpleTest bt_server_key_test :
+	bt_server_key_test.cpp
+	BluetoothKeyStore.cpp
+	LocalDeviceImpl.cpp
+	LocalDeviceHandler.cpp
+	: be libbluetooth.so [ TargetLibsupc++ ]
+;
+
+SimpleTest bt_rfcomm_fcs_test :
+	bt_rfcomm_fcs_test.cpp
+	: be [ TargetLibsupc++ ]
+;
+
+SimpleTest bt_spp_test :
+	bt_spp_test.cpp
+	: be libbluetooth.so network [ TargetLibsupc++ ]
+;
+
+SimpleTest bt_pbap_test :
+	bt_pbap_test.cpp
+	: be libbluetooth.so network [ TargetLibsupc++ ]
+;
+
+SimpleTest vcf2people :
+	vcf2people.cpp
+	: be libbluetooth.so [ TargetLibsupc++ ]
+;
+
+SimpleTest bt_contact_sync :
+	bt_contact_sync.cpp
+	: be libbluetooth.so network tracker [ TargetLibsupc++ ]
+;
+
+Addon ContactSyncReplicant :
+	ContactSyncReplicant.cpp
+	: be [ TargetLibsupc++ ]
+;
+
+SimpleTest bt_contact_sync_daemon :
+	bt_contact_sync_daemon.cpp
+	: be libbluetooth.so network [ TargetLibsupc++ ]
+;
+
+SimpleTest bt_opp_test :
+	bt_opp_test.cpp
+	: be libbluetooth.so network [ TargetLibsupc++ ]
+;
+
+SimpleTest bt_hfp_test :
+	bt_hfp_test.cpp
+	: be libbluetooth.so network [ TargetLibsupc++ ]
+;
+
+SimpleTest bt_at_parser_test :
+	bt_at_parser_test.cpp
+	: be libbluetooth.so [ TargetLibsupc++ ]
+;
+
+SimpleTest bt_a2dp_test :
+	bt_a2dp_test.cpp
+	: be libbluetooth.so network [ TargetLibsupc++ ]
+;
+
+SimpleTest bt_sbc_test :
+	bt_sbc_test.cpp
+	: be libbluetooth.so [ TargetLibsupc++ ]
+;
+
+SimpleTest bt_sbc_enc_test :
+	bt_sbc_enc_test.cpp
+	: be libbluetooth.so [ TargetLibsupc++ ]
+;
+
+SimpleTest bt_a2dp_source_test :
+	bt_a2dp_source_test.cpp
+	: be libbluetooth.so network [ TargetLibsupc++ ]
+;
+
+SimpleTest bt_hfp_ag_test :
+	bt_hfp_ag_test.cpp
+	: be libbluetooth.so network [ TargetLibsupc++ ]
+;
+
+SimpleTest bt_avrcp_test :
+	bt_avrcp_test.cpp
+	: be libbluetooth.so network [ TargetLibsupc++ ]
+;
+
+SimpleTest bt_sco_test :
+	bt_sco_test.cpp
+	: be libbluetooth.so network [ TargetLibsupc++ ]
+;
+
+SimpleTest bt_ertm_test :
+	bt_ertm_test.cpp
+	: be libbluetooth.so network [ TargetLibsupc++ ]
+;
+
+SimpleTest bt_pair_test :
+	bt_pair_test.cpp
+	: be libbluetooth.so network [ TargetLibsupc++ ]
+;
+
+SimpleTest bt_psm_leak_test :
+	bt_psm_leak_test.cpp
+	: be libbluetooth.so network [ TargetLibsupc++ ]
+;
+
+SimpleTest bt_reconnect_test :
+	bt_reconnect_test.cpp
+	: be libbluetooth.so network [ TargetLibsupc++ ]
+;
+
+SimpleTest bt_keystore_clean :
+	bt_keystore_clean.cpp
+	BluetoothKeyStore.cpp
+	: be [ TargetLibsupc++ ]
+;
+
+SimpleTest bt_query :
+	bt_query.cpp
+	: be libbluetooth.so network [ TargetLibsupc++ ]
+;
+
+SimpleTest BluetoothTerminal :
+	BluetoothTerminal.cpp
+	: be libbluetooth.so network [ TargetLibsupc++ ]
+;
+
+SimpleTest bt_intel_test :
+	bt_intel_test.cpp
+	: be [ TargetLibsupc++ ]
+;
+
+SimpleTest BluetoothSendFile :
+	BluetoothSendFile.cpp
+	: be libbluetooth.so network tracker [ TargetLibsupc++ ]
+;
+
+SubInclude HAIKU_TOP src tests kits bluetooth l2capClient ;
+SubInclude HAIKU_TOP src tests kits bluetooth smp_crypto ;

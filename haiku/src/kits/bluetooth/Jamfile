@@ -1,0 +1,61 @@
+SubDir HAIKU_TOP src kits bluetooth ;
+
+#if ! $(TARGET_PLATFORM_HAIKU_COMPATIBLE) {
+#       UseHeaders [ FDirName $(HAIKU_TOP) headers os ] : true ;
+#}
+
+UsePrivateHeaders shared bluetooth ;
+
+SubDirHdrs [ FDirName $(SUBDIR) UI ] ;
+
+local architectureObject ;
+for architectureObject in [ MultiArchSubDirSetup ] {
+	on $(architectureObject) {
+
+		SEARCH_SOURCE += [ FDirName $(SUBDIR) UI ] ;
+
+		SharedLibrary [ MultiArchDefaultGristFiles libbluetooth.so ] :
+			LocalDevice.cpp
+			DiscoveryListener.cpp
+			DiscoveryAgent.cpp
+			RemoteDevice.cpp
+			CommandManager.cpp
+			KitSupport.cpp
+			DeviceClass.cpp
+			BleDevice.cpp
+			NusClient.cpp
+			RfcommSession.cpp
+			SppClient.cpp
+			ObexClient.cpp
+			OppClient.cpp
+			PbapClient.cpp
+			VCardParser.cpp
+			PeopleWriter.cpp
+			HfpClient.cpp
+			HfpAudioGateway.cpp
+			AtParser.cpp
+			A2dpSink.cpp
+			A2dpSource.cpp
+			AvrcpTarget.cpp
+			AvdtpSession.cpp
+			SbcDecoder.cpp
+			ScoSocket.cpp
+			SbcEncoder.cpp
+			#UI
+			PincodeWindow.cpp
+			NumericComparisonWindow.cpp
+			ConnectionIncoming.cpp
+			ConnectionView.cpp
+			BluetoothIconView.cpp
+			:
+			be network localestub [ TargetLibstdc++ ]
+		;
+	}
+}
+
+DoCatalogs libbluetooth.so :
+	x-vnd.Haiku-Bluetooth
+	:
+	DeviceClass.cpp
+	RemoteDevice.cpp
+;

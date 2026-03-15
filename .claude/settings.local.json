@@ -1,0 +1,43 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//dev/bluetooth/**)",
+      "Bash(listdev)",
+      "Bash(listusb)",
+      "Read(//boot/system/non-packaged/add-ons/kernel/drivers/bin/**)",
+      "Read(//boot/system/non-packaged/add-ons/kernel/bluetooth/**)",
+      "Read(//boot/system/non-packaged/lib/**)",
+      "Read(//boot/system/non-packaged/servers/**)",
+      "Read(//boot/system/non-packaged/add-ons/kernel/network/protocols/**)",
+      "Bash(dmesg:*)",
+      "Bash(git --version)",
+      "Read(//boot/home/**)",
+      "WebFetch(domain:cgit.haiku-os.org)",
+      "WebFetch(domain:git.haiku-os.org)",
+      "Bash(gh api:*)",
+      "WebFetch(domain:review.haiku-os.org)",
+      "Bash(kill %1)",
+      "Bash(rm -rf /tmp/haiku-xhci)",
+      "Bash(curl -sL \"https://git.haiku-os.org/haiku/plain/src/add-ons/kernel/busses/usb/xhci.cpp\" -o /tmp/xhci.cpp)",
+      "Read(//tmp/**)",
+      "Bash(curl -sL \"https://raw.githubusercontent.com/haiku/haiku/master/src/add-ons/kernel/busses/usb/xhci.cpp\" -o /tmp/xhci.cpp)",
+      "Read(//boot/system/cache/tmp/**)",
+      "Bash(curl:*)",
+      "Read(//boot/system/**)",
+      "Read(//boot/system/develop/**)",
+      "Bash(listusb:*)",
+      "Bash(find:*)",
+      "Bash(mkdir:*)",
+      "WebFetch(domain:www.haiku-os.org)",
+      "WebSearch",
+      "WebFetch(domain:dev.haiku-os.org)",
+      "Bash(ls:*)",
+      "Bash(ln:*)",
+      "Bash(rm:*)",
+      "Bash(xxd:*)",
+      "Bash(od:*)",
+      "Bash(listimage:*)",
+      "Bash(cd:*)"
+    ]
+  }
+}

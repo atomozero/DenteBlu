@@ -1,0 +1,20 @@
+SubDir HAIKU_TOP src tests kits bluetooth smp_crypto ;
+
+UsePrivateHeaders bluetooth ;
+
+SimpleTest test_smp_crypto :
+	test_smp_crypto.cpp
+	smp_crypto.cpp
+	p256.cpp
+;
+
+SimpleTest test_smp_pairing :
+	test_smp_pairing.cpp
+	smp_crypto.cpp
+	p256.cpp
+;
+
+SimpleTest test_p256 :
+	test_p256.cpp
+	p256.cpp
+;

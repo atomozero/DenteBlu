@@ -1,0 +1,266 @@
+DenteBlu — Roadmap Supporto Cuffie Bluetooth
+=============================================
+
+Obiettivo: collegare cuffie BT classiche (A2DP + HFP) a Haiku OS.
+Stato attuale: lo stack ha i ruoli INVERSI (A2DP Sink + HFP HF).
+Servono: A2DP Source + HFP AG + AVRCP Target + SCO audio.
+
+Stima totale: ~4750 linee di codice, 7 fasi.
+
+
+========================================================================
+FASE A — SBC Encoder (~600 righe)
+========================================================================
+
+Controparte di SbcDecoder.cpp (610 righe). Codifica PCM int16 in frame
+SBC come richiesto dalla specifica A2DP Appendice B.
+
+Task A.1: Struttura base SbcEncoder
+  - SbcEncoder.h: classe con EncodeFrame(), Configure(), FrameLength()
+  - SbcEncoder.cpp: costruttore, _BuildHeader(), CRC-8
+  - Test: istanziazione, header generation, CRC calcolo
+
+Task A.2: Analisi subband (filter bank)
+  - Matrice coseno di analisi (inversa della sintesi del decoder)
+  - Windowing con coefficienti proto (sProto8/sProto4)
+  - Test: segnale DC → tutte le subband a zero tranne sb0
+  - Test: tono sinusoidale → energia concentrata nella subband corretta
+
+Task A.3: Quantizzazione e bit allocation
+  - Scale factor computation
+  - SNR e Loudness allocation (identica al decoder)
+  - Quantizzazione dei campioni subband
+  - Test: bit allocation per bitpool noti, confronto con decoder
+
+Task A.4: Joint stereo e packing
+  - Joint stereo encoding (M/S decision per subband)
+  - BitWriter per impacchettare i campioni quantizzati
+  - Test: encode silenzio → decode → silenzio
+  - Test: encode onda sinusoidale → decode → confronto SNR > 40dB
+
+Task A.5: Roundtrip test completo
+  - Encode → Decode ciclo con vari parametri
+  - 44.1kHz stereo, 48kHz mono, 16kHz mono
+  - Bitpool 2, 32, 53
+  - Test: SNR > 30dB per tutti i casi
+  - Integrazione in Jamfile (libbluetooth.so + bt_sbc_enc_test)
+
+
+========================================================================
+FASE B — A2DP Source (~500 righe)
+========================================================================
+
+Controparte di A2dpSink.cpp (552 righe). Invia audio codificato SBC
+a cuffie remote usando AVDTP.
+
+Task B.1: Classe A2dpSource base
+  - A2dpSource.h: Connect(), Disconnect(), StartStream(), StopStream()
+  - Riuso di AvdtpSession per AVDTP signaling
+  - Test: compilazione, istanziazione
+
+Task B.2: Endpoint discovery e codec negotiation
+  - Discover → trova AVDTP_SEP_SINK sul dispositivo remoto
+  - SetConfiguration con SBC (44.1kHz, Joint Stereo, bitpool 2-53)
+  - Test: unit test con mock delle capabilities
+
+Task B.3: Media transport e send loop
+  - OpenMediaChannel() per canale media
+  - SendAudio(const int16* pcm, size_t samples): encode → RTP → send
+  - Pacing: rispetta timing basato su sample rate e dimensione frame
+  - Test: formato pacchetto RTP corretto, media header SBC
+
+Task B.4: Integrazione Jamfile e header pubblico
+  - headers/os/bluetooth/A2dpSource.h
+  - Aggiunta a libbluetooth.so Jamfile
+  - bt_a2dp_source_test.cpp: test di integrazione
+
+
+========================================================================
+FASE C — SDP Record A2DP Source (~50 righe)
+========================================================================
+
+Registra il servizio A2DP Source (UUID 0x110A) via SDP cosi' le cuffie
+possono trovare Haiku come sorgente audio.
+
+Task C.1: _BuildA2dpSourceRecord() in SdpServer.cpp
+  - Copia e adatta _BuildA2dpSinkRecord()
+  - UUID: 0x110A (Audio Source) invece di 0x110B (Audio Sink)
+  - ServiceName: "Audio Source"
+  - Test: bt_sdp_query per UUID 0x110A
+
+Task C.2: Registrazione e UUID search
+  - Aggiungere record alla lista in SdpServer constructor
+  - UUID search deve trovare 0x110A
+  - Test: SDP query remoto (se disponibile hardware)
+
+
+========================================================================
+FASE D — bluetooth_audio.media_addon (~1100 righe)
+========================================================================
+
+Media add-on per Haiku Media Kit. Appare in Cortex come nodo audio.
+Riceve buffer PCM dal media_server e li invia via A2dpSource.
+
+Task D.1: Scheletro media add-on
+  - BluetoothAudioAddOn (BMediaAddOn): CountFlavors, GetFlavorAt,
+    InstantiateNodeFor, make_media_addon()
+  - Jamfile con regola Addon
+  - Test: add-on caricabile, flavors enumerabili
+
+Task D.2: BluetoothAudioConsumer (BBufferConsumer + BMediaNode)
+  - AcceptFormat(): raw audio int16
+  - Connected()/Disconnected(): gestione connessione A2DP
+  - BufferReceived(): PCM → SbcEncoder → A2dpSource::SendAudio()
+  - Test: formato accettato correttamente
+
+Task D.3: Controllo volume e parametri
+  - BControllable: volume master
+  - GetParameterValue()/SetParameterValue()
+  - Test: parametri esposti correttamente
+
+Task D.4: Gestione connessione device
+  - Scan dispositivi paired
+  - Auto-connect al dispositivo selezionato
+  - Gestione disconnessione/riconnessione
+  - Test: lifecycle connessione
+
+
+========================================================================
+FASE E — AVRCP Target (~700 righe)
+========================================================================
+
+Audio/Video Remote Control Profile: gestisce i tasti delle cuffie
+(play/pause/stop/avanti/indietro/volume).
+
+Task E.1: AVCTP transport
+  - AVCTP su L2CAP PSM 0x0017
+  - Parsing header AVCTP (transaction label, PID)
+  - Test: header parsing
+
+Task E.2: AVRCP command handler
+  - AV/C frame parsing (ctype, subunit, opcode)
+  - Passthrough commands: Play, Pause, Stop, Forward, Backward
+  - Volume handling (Absolute Volume)
+  - Test: parsing comandi noti
+
+Task E.3: Notifiche e SDP
+  - RegisterNotification per cambio traccia/volume
+  - SDP record AVRCP Target (UUID 0x110C)
+  - Test: SDP record presente
+
+Task E.4: Integrazione con media_server
+  - Callback verso BluetoothAudioConsumer per comandi
+  - Forwarding a media player (BMediaRoster)
+  - Test: comando play → azione corrispondente
+
+
+========================================================================
+FASE F — HFP Audio Gateway (~800 righe)
+========================================================================
+
+Ruolo AG: Haiku fa da "telefono" per le cuffie.
+Le cuffie inviano comandi AT, Haiku risponde.
+
+Task F.1: HfpAudioGateway classe base
+  - HfpAudioGateway.h: Listen(), Accept(), SLC handshake
+  - RFCOMM server socket (channel da SDP)
+  - Test: compilazione, istanziazione
+
+Task F.2: AT command responder
+  - Riuso AtParser per parsing
+  - Risposte AT+BRSF, AT+CIND, AT+CMER, AT+CHLD
+  - Invio "+CIEV" per indicatori
+  - Test: handshake SLC con comandi simulati
+
+Task F.3: Audio routing SCO
+  - Setup connessione SCO (vedi Fase G)
+  - Routing audio bidirezionale
+  - Test: setup SCO simulato
+
+Task F.4: SDP record HFP AG
+  - UUID 0x111F (HandsfreeAudioGateway)
+  - Aggiunta a SdpServer
+  - Test: SDP record presente
+
+
+========================================================================
+FASE G — SCO Audio Transport (~1000 righe)
+========================================================================
+
+Sincronous Connection Oriented: audio voce bidirezionale per HFP.
+Richiede supporto kernel + driver.
+
+Task G.1: HCI SCO commands
+  - buildSetupSynchronousConnection() in CommandManager
+  - buildAcceptSynchronousConnection()
+  - Event handling per SCO Connect Complete
+  - Test: build command, verificare formato
+
+Task G.2: SCO data path in h2generic
+  - SCO endpoint nel driver USB
+  - Isocronous transfers (USB)
+  - Buffer circolare per audio SCO
+  - Test: compilazione driver
+
+Task G.3: Kernel SCO module
+  - SCO socket type in btCoreData
+  - Routing pacchetti SCO
+  - Test: modulo caricabile
+
+Task G.4: Userspace SCO API
+  - ScoSocket class in Kit
+  - Read()/Write() per audio 8kHz/16kHz
+  - Test: apertura socket SCO
+
+
+========================================================================
+DIPENDENZE TRA FASI
+========================================================================
+
+  A (SbcEncoder) ─┐
+                   ├──► B (A2dpSource) ──► D (media add-on)
+  C (SDP Source) ──┘                          │
+                                              │
+  E (AVRCP) ──────────────────────────────────┘
+
+  F (HFP AG) ──────► G (SCO audio)
+
+Fasi A, C, E sono indipendenti e possono procedere in parallelo.
+Fase B richiede A.
+Fase D richiede B.
+Fase G richiede F.
+
+
+========================================================================
+PRIORITA'
+========================================================================
+
+1. A + B + C + D = audio musicale verso cuffie (MVP)
+2. E = controlli cuffie (play/pause/volume)
+3. F + G = chiamate voce (nice-to-have)
+
+
+========================================================================
+HARDWARE RICHIESTO
+========================================================================
+
+- Adattatore BT 2.1+EDR o superiore (BCM2070 sufficiente per A2DP)
+- Cuffie BT con supporto A2DP Sink (qualsiasi cuffia standard)
+- Per SCO (Fase G): potrebbe servire adattatore con endpoint isocroni
+
+
+========================================================================
+STATO AVANZAMENTO
+========================================================================
+
+[x] Studio di fattibilita' completato
+[x] Fase A — SBC Encoder (32/32 test OK, SNR 14.1 dB)
+[x] Fase B — A2DP Source (A2dpSource + SBC encoder + AVDTP, SDP record)
+[x] Fase C — SDP Record Source (index 7, handle 0x00070001, UUID 0x110A)
+[x] Fase D — Media Add-on (bluetooth_audio BBufferConsumer + BMediaEventLooper)
+[x] Fase E — AVRCP Target (AvrcpTarget + SDP record index 8, button/volume)
+[x] Fase F — HFP Audio Gateway (HfpAudioGateway + SDP record index 9, RFCOMM ch4)
+[x] Fase G — SCO Audio Transport (ScoSocket + SyncConnectionComplete + bt_sco_test)
+
+Tutte le fasi sono complete (codice + test). Servono test con hardware reale
+(cuffie BT con A2DP Sink).

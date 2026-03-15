@@ -1,0 +1,9 @@
+SubDir HAIKU_TOP src add-ons kernel bluetooth att ;
+
+UsePrivateKernelHeaders ;
+UsePrivateHeaders net bluetooth ;
+
+KernelAddon bt_att :
+	AttChannel.cpp
+	GattClient.cpp
+	;
