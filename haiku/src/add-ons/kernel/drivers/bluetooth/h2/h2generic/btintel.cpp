@@ -56,6 +56,96 @@ intel_sync_callback(void* cookie, status_t status, void* data,
 }
 
 
+// Forward declarations
+static status_t btintel_send_cmd_sync(bt_usb_dev* bdev, uint16 opcode,
+	const void* params, uint8 param_len,
+	void* response, size_t resp_size, size_t* actual_resp);
+static status_t btintel_load_ddc(bt_usb_dev* bdev, const char* ddc_name);
+
+
+// Drain pending events from the interrupt endpoint.
+// After Intel Reset the chip reboots and sends vendor events (0xFF):
+//   sub-event 0x06 = firmware startup notification
+//   sub-event 0x02 = boot complete
+// These must be consumed before sending any HCI commands, otherwise
+// Read Version (0xFC05) gets the vendor events instead of its
+// Command Complete and times out.
+// Returns B_OK when boot complete event (0xFF, sub-event 0x02) is
+// received, or B_TIMED_OUT if no events arrive.
+static status_t
+btintel_drain_boot_events(bt_usb_dev* bdev)
+{
+	ERROR("btintel: draining boot events...\n");
+
+	int events_drained = 0;
+	bool boot_complete = false;
+
+	for (int i = 0; i < 10; i++) {
+		intel_sync_ctx evt_ctx;
+		evt_ctx.done = create_sem(0, "btintel_drain");
+		if (evt_ctx.done < 0)
+			return evt_ctx.done;
+		evt_ctx.status = B_ERROR;
+		evt_ctx.actual_len = 0;
+
+		uint8 evt_buf[260];
+		status_t err = usb->queue_interrupt(bdev->intr_in_ep->handle,
+			evt_buf, sizeof(evt_buf), intel_sync_callback, &evt_ctx);
+		if (err != B_OK) {
+			delete_sem(evt_ctx.done);
+			return err;
+		}
+
+		// Short timeout: 500ms per event, enough for boot events
+		err = acquire_sem_etc(evt_ctx.done, 1, B_RELATIVE_TIMEOUT,
+			500000);
+		if (err != B_OK) {
+			// Timeout — no more pending events
+			delete_sem(evt_ctx.done);
+			usb->cancel_queued_transfers(bdev->intr_in_ep->handle);
+			break;
+		}
+		delete_sem(evt_ctx.done);
+
+		if (evt_ctx.status != B_OK || evt_ctx.actual_len < 1)
+			continue;
+
+		events_drained++;
+		ERROR("btintel: drained event 0x%02x (%" B_PRIuSIZE
+			" bytes)\n", evt_buf[0], evt_ctx.actual_len);
+
+		// Check for boot complete: vendor event 0xFF, sub-event 0x02
+		if (evt_buf[0] == 0xFF && evt_ctx.actual_len >= 3
+			&& evt_buf[2] == 0x02) {
+			boot_complete = true;
+			ERROR("btintel: boot complete event received\n");
+			// Drain one more time in case there are trailing events
+			continue;
+		}
+	}
+
+	ERROR("btintel: drained %d boot events (complete=%d)\n",
+		events_drained, boot_complete);
+	return boot_complete ? B_OK : (events_drained > 0 ? B_OK : B_TIMED_OUT);
+}
+
+
+// Set Intel-specific event mask (0xFC52).
+// Enables vendor events needed for operational mode:
+//   bit 0: fatal exception, bit 1: bootup, bit 2: hw error,
+//   bit 7: debug, bit 10: DDC complete, bit 11: link quality report
+static status_t
+btintel_set_event_mask(bt_usb_dev* bdev)
+{
+	// Linux btintel default event mask
+	uint8 mask[8] = { 0x87, 0x0c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+
+	ERROR("btintel: setting Intel event mask\n");
+	return btintel_send_cmd_sync(bdev, INTEL_HCI_SET_EVENT_MASK,
+		mask, sizeof(mask), NULL, 0, NULL);
+}
+
+
 // Send an HCI vendor command and wait for the command complete event.
 // response/resp_size may be NULL/0 if no response payload is needed.
 static status_t
@@ -241,6 +331,45 @@ retry_event:
 	return B_OK;
 }
 
+
+// Send an HCI command via USB control endpoint without waiting for a
+// response.  Used for Intel Reset (0xFC01) where the chip reboots USB
+// immediately and will never send a Command Complete.
+static status_t
+btintel_send_cmd_nosync(bt_usb_dev* bdev, uint16 opcode,
+	const void* params, uint8 param_len)
+{
+	uint8 cmd[259];
+	cmd[0] = opcode & 0xFF;
+	cmd[1] = (opcode >> 8) & 0xFF;
+	cmd[2] = param_len;
+	if (param_len > 0 && params != NULL)
+		memcpy(cmd + 3, params, param_len);
+
+	intel_sync_ctx ctx;
+	ctx.done = create_sem(0, "btintel_nosync");
+	if (ctx.done < 0)
+		return ctx.done;
+	ctx.status = B_ERROR;
+	ctx.actual_len = 0;
+
+	status_t err = usb->queue_request(bdev->dev, USB_TYPE_CLASS, 0, 0, 0,
+		3 + param_len, cmd, intel_sync_callback, &ctx);
+	if (err != B_OK) {
+		delete_sem(ctx.done);
+		return err;
+	}
+
+	// Wait only for the USB transfer to complete (control endpoint ACK),
+	// not for an HCI event response.
+	err = acquire_sem_etc(ctx.done, 1, B_RELATIVE_TIMEOUT,
+		INTEL_CMD_TIMEOUT);
+	delete_sem(ctx.done);
+
+	if (err != B_OK)
+		return err;
+	return ctx.status;
+}
 
 
 // Send an Intel Secure Send (0xFC09) command via USB bulk OUT and wait for
@@ -960,9 +1089,10 @@ btintel_download_and_reset(bt_usb_dev* bdev, const char* fw_name)
 	ERROR("btintel: sending Intel Reset "
 		"(boot_addr=0x%08" B_PRIx32 ")\n", boot_addr);
 
-	btintel_send_cmd_sync(bdev, INTEL_HCI_RESET,
-		&reset_params, sizeof(reset_params),
-		NULL, 0, NULL);
+	// Fire-and-forget: the chip reboots USB immediately after this
+	// command, so no Command Complete will be sent.
+	btintel_send_cmd_nosync(bdev, INTEL_HCI_RESET,
+		&reset_params, sizeof(reset_params));
 
 	ERROR("btintel: Intel Reset issued, waiting for USB "
 		"disconnect\n");
@@ -1072,6 +1202,14 @@ btintel_setup(bt_usb_dev* bdev)
 	// understand standard HCI commands and returns "Unknown Command".
 	// Linux btusb also reads version first without resetting.
 
+	// Drain any pending boot events from a previous Intel Reset.
+	// After firmware download + Intel Reset, the chip reboots USB and
+	// sends vendor events (startup 0x06, boot complete 0x02) on the
+	// interrupt endpoint.  If we don't consume them first, Read Version
+	// below will receive vendor events instead of its Command Complete.
+	// On first call (bootloader mode) this returns quickly with timeout.
+	btintel_drain_boot_events(bdev);
+
 	// 1. Read Intel version — send with parameter 0xFF.
 	// Legacy chips ignore the extra parameter, but TLV-generation chips
 	// (AX201/AX211, Alder Lake+) require it and reject the command without.
@@ -1113,6 +1251,24 @@ btintel_setup(bt_usb_dev* bdev)
 		if (ver.fw_variant == 0x23) {
 			ERROR("btintel: firmware already loaded, "
 				"device operational\n");
+
+			// Load DDC (Device Default Configuration) — calibration
+			// data for radio parameters.  Non-critical if missing.
+			char ddc_name[64];
+			if (ver.hw_variant >= 0x11) {
+				snprintf(ddc_name, sizeof(ddc_name),
+					"ibt-%d-%d-%d.ddc", ver.hw_variant,
+					ver.hw_revision, ver.fw_revision);
+			} else {
+				snprintf(ddc_name, sizeof(ddc_name),
+					"ibt-%d-%d.ddc", ver.hw_variant,
+					ver.hw_revision);
+			}
+			btintel_load_ddc(bdev, ddc_name);
+
+			// Set Intel vendor event mask for operational mode
+			btintel_set_event_mask(bdev);
+
 			return B_OK;
 		}
 
@@ -1220,11 +1376,10 @@ btintel_setup(bt_usb_dev* bdev)
 		ERROR("btintel: legacy: sending Intel Reset "
 			"(boot_addr=0x%08" B_PRIx32 ")\n", boot_addr);
 
-		// Linux uses __hci_cmd_sync for Intel Reset (goes via
-		// control endpoint, not bulk — only 0xFC09 uses bulk).
-		btintel_send_cmd_sync(bdev, INTEL_HCI_RESET,
-			&reset_params, sizeof(reset_params),
-			NULL, 0, NULL);
+		// Fire-and-forget: the chip reboots USB immediately after this
+		// command, so no Command Complete will be sent.
+		btintel_send_cmd_nosync(bdev, INTEL_HCI_RESET,
+			&reset_params, sizeof(reset_params));
 
 		ERROR("btintel: legacy: Intel Reset issued, waiting "
 			"for USB disconnect\n");

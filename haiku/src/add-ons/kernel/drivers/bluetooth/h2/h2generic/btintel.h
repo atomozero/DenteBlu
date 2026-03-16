@@ -16,6 +16,7 @@
 #define INTEL_HCI_READ_VERSION     0xfc05
 #define INTEL_HCI_SECURE_SEND      0xfc09
 #define INTEL_HCI_READ_BOOT_PARAMS 0xfc0d
+#define INTEL_HCI_SET_EVENT_MASK   0xfc52
 #define INTEL_HCI_WRITE_DDC        0xfc8b
 
 // Intel vendor USB IDs
