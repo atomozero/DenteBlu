@@ -8,16 +8,25 @@
  * and require firmware download before becoming operational HCI controllers
  * (fw_variant 0x23). This module implements the firmware loading sequence:
  *
- *   1. Read Intel Version (vendor cmd 0xFC05) — no HCI Reset first!
- *   2. If already operational, return success
- *   3. Read Boot Parameters (vendor cmd 0xFC0D)
- *   4. Build firmware filename from hw_variant + dev_revid
- *   5. Load .sfi firmware file from disk
- *   6. Send firmware commands extracted from the .sfi file
- *   7. Intel Reset (vendor cmd 0xFC01) to boot into firmware
- *   8. Verify device is now operational
+ *   First call (bootloader mode):
+ *     1. Drain boot events (no-op on first call, returns quickly)
+ *     2. Read Intel Version (vendor cmd 0xFC05) — no HCI Reset first!
+ *     3. Detect bootloader (fw_variant 0x06)
+ *     4. Read Boot Parameters (vendor cmd 0xFC0D)
+ *     5. Build firmware filename from hw_variant + dev_revid
+ *     6. Load .sfi firmware file from disk
+ *     7. Download firmware via Secure Send (0xFC09, bulk endpoint)
+ *     8. Intel Reset (vendor cmd 0xFC01, fire-and-forget) → chip reboots
+ *     9. Return B_SHUTTING_DOWN → device_added registers handle for USB cycle
  *
- * Firmware files must be placed in:
+ *   Second call (after USB reconnect, operational firmware):
+ *     1. Drain boot events (vendor 0xFF: startup 0x06, boot complete 0x02)
+ *     2. Read Intel Version → fw_variant 0x23 (operational)
+ *     3. Load DDC file (.ddc) for radio calibration (non-critical)
+ *     4. Set Intel Event Mask (0xFC52)
+ *     5. Return B_OK → device ready for bluetooth_server
+ *
+ * Firmware/DDC files must be placed in:
  *   /boot/system/non-packaged/data/firmware/intel/
  * or:
  *   /boot/system/data/firmware/intel/
