@@ -356,6 +356,65 @@ device_added(usb_device dev, void** cookie)
 		goto bail;
 	}
 
+#ifdef BLUETOOTH_SUPPORTS_SCO
+	// SCO/eSCO isochronous endpoints live on USB interface 1.
+	// BT USB spec defines multiple alt settings with different bandwidth:
+	//   Alt 0: no endpoints (SCO disabled)
+	//   Alt 1: 8kHz HV3 (9 bytes)
+	//   Alt 2: 8kHz HV1/HV2 (17 bytes)
+	//   Alt 3: 8kHz HV1 (25 bytes)
+	//   Alt 4: 16kHz (33 bytes)
+	//   Alt 5: 16kHz mSBC wideband (49 bytes)
+	// We pick alt 1 (minimum bandwidth) for now; the stack can switch
+	// alt settings later based on the SCO connection parameters.
+	new_bt_dev->iso_in_ep = NULL;
+	new_bt_dev->iso_out_ep = NULL;
+	new_bt_dev->sco_interface = NULL;
+	new_bt_dev->sco_alt_setting = 0;
+
+	if (config->interface_count >= 2) {
+		// Interface 1 is the SCO interface
+		const usb_interface_list* sco_list = &config->interface[1];
+		// Use alt setting 1 (minimum bandwidth, non-zero endpoints)
+		uint8 sco_alt = (sco_list->alt_count > 1) ? 1 : 0;
+
+		if (sco_alt < sco_list->alt_count) {
+			const usb_interface_info* sco_if = &sco_list->alt[sco_alt];
+
+			for (int se = 0; se < sco_if->descr->num_endpoints; se++) {
+				const usb_endpoint_info* sep = &sco_if->endpoint[se];
+				if ((sep->descr->attributes & USB_ENDPOINT_ATTR_MASK)
+					!= USB_ENDPOINT_ATTR_ISOCHRONOUS)
+					continue;
+
+				if (sep->descr->endpoint_address
+					& USB_ENDPOINT_ADDR_DIR_IN) {
+					new_bt_dev->iso_in_ep = sep;
+					new_bt_dev->max_packet_size_iso_in
+						= sep->descr->max_packet_size;
+				} else {
+					new_bt_dev->iso_out_ep = sep;
+					new_bt_dev->max_packet_size_iso_out
+						= sep->descr->max_packet_size;
+				}
+			}
+
+			if (new_bt_dev->iso_in_ep && new_bt_dev->iso_out_ep) {
+				new_bt_dev->sco_interface = sco_if;
+				new_bt_dev->sco_alt_setting = sco_alt;
+				TRACE("%s: SCO endpoints found (alt %d, "
+					"max_in=%d, max_out=%d)\n", __func__,
+					sco_alt,
+					new_bt_dev->max_packet_size_iso_in,
+					new_bt_dev->max_packet_size_iso_out);
+			} else {
+				TRACE("%s: SCO interface found but incomplete "
+					"endpoints\n", __func__);
+			}
+		}
+	}
+#endif
+
 	// Look into the devices suported to understand this
 	if (new_bt_dev->driver_info & BT_DIGIANSWER)
 		new_bt_dev->ctrl_req = USB_TYPE_VENDOR;
@@ -458,6 +517,12 @@ device_removed(void* cookie)
 		usb->cancel_queued_transfers(bdev->bulk_in_ep->handle);
 	if (bdev->bulk_out_ep != NULL)
 		usb->cancel_queued_transfers(bdev->bulk_out_ep->handle);
+#ifdef BLUETOOTH_SUPPORTS_SCO
+	if (bdev->iso_in_ep != NULL)
+		usb->cancel_queued_transfers(bdev->iso_in_ep->handle);
+	if (bdev->iso_out_ep != NULL)
+		usb->cancel_queued_transfers(bdev->iso_out_ep->handle);
+#endif
 
 	bdev->connected = false;
 
@@ -564,7 +629,9 @@ device_open(const char* name, uint32 flags, void **cookie)
 	// dumping the USB frames
 	init_room(&bdev->eventRoom);
 	init_room(&bdev->aclRoom);
-	// init_room(new_bt_dev->scoRoom);
+#ifdef BLUETOOTH_SUPPORTS_SCO
+	init_room(&bdev->scoRoom);
+#endif
 
 	list_init(&bdev->snetBufferRecycleTrash);
 
@@ -623,6 +690,13 @@ device_close(void* cookie)
 
 		if (bdev->bulk_out_ep!=NULL)
 			usb->cancel_queued_transfers(bdev->bulk_out_ep->handle);
+
+#ifdef BLUETOOTH_SUPPORTS_SCO
+		if (bdev->iso_in_ep != NULL)
+			usb->cancel_queued_transfers(bdev->iso_in_ep->handle);
+		if (bdev->iso_out_ep != NULL)
+			usb->cancel_queued_transfers(bdev->iso_out_ep->handle);
+#endif
 	}
 
 	// TX
@@ -643,6 +717,9 @@ device_close(void* cookie)
 
 	purge_room(&bdev->eventRoom);
 	purge_room(&bdev->aclRoom);
+#ifdef BLUETOOTH_SUPPORTS_SCO
+	purge_room(&bdev->scoRoom);
+#endif
 
 	// Device no longer in our Stack
 	if (btDevices != NULL)

@@ -12,6 +12,9 @@
 #define BT_DRIVER_SUPPORTS_SCO  1
 #define BT_DRIVER_SUPPORTS_ESCO 0
 
+// Enable SCO isochronous endpoint fields in bt_usb_dev
+#define BLUETOOTH_SUPPORTS_SCO
+
 
 // TODO: move exclusive header for drivers
 #define BT_DRIVER_RXCOVERAGE (BT_DRIVER_SUPPORTS_EVT + BT_DRIVER_SUPPORTS_ACL \

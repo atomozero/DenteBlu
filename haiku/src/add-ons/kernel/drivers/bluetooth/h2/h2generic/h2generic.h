@@ -85,8 +85,13 @@ struct bt_usb_dev {
 			uint16				max_packet_size_intr_in;
 
 #ifdef BLUETOOTH_SUPPORTS_SCO
-	const usb_endpoint_info	*iso_in_ep;
-	const usb_endpoint_info	*iso_out_ep;
+	const usb_endpoint_info*	iso_in_ep;
+			uint16				max_packet_size_iso_in;
+	const usb_endpoint_info*	iso_out_ep;
+			uint16				max_packet_size_iso_out;
+	const usb_interface_info*	sco_interface;
+			uint8				sco_alt_setting;
+	struct list					scoRoom;
 #endif
 
 	/* This so called rooms, are for dumping the USB RX frames

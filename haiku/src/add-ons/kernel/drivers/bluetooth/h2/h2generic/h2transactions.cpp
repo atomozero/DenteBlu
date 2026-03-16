@@ -231,8 +231,49 @@ submit_rx_acl(bt_usb_dev* bdev)
 status_t
 submit_rx_sco(bt_usb_dev* bdev)
 {
-	// not yet implemented
-	return B_ERROR;
+#ifdef BLUETOOTH_SUPPORTS_SCO
+	if (bdev->iso_in_ep == NULL || bdev->sco_interface == NULL)
+		return B_DEV_NOT_READY;
+
+	// Activate the SCO alt setting to enable the isochronous endpoints.
+	// Alt 0 has zero bandwidth; we need alt >= 1 for actual data.
+	status_t err = usb->set_alt_interface(bdev->dev,
+		bdev->sco_interface);
+	if (err != B_OK) {
+		ERROR("%s: failed to set SCO alt interface: %s\n",
+			__func__, strerror(err));
+		return err;
+	}
+
+	// Queue isochronous IN transfer for SCO audio data
+	size_t size = bdev->max_packet_size_iso_in;
+	if (size == 0)
+		size = 49; // mSBC max frame size
+
+	void* buf = malloc(size);
+	if (buf == NULL)
+		return B_NO_MEMORY;
+
+	usb_iso_packet_descriptor descs[1];
+	descs[0].request_length = size;
+
+	err = usb->queue_isochronous(bdev->iso_in_ep->handle,
+		buf, size, descs, 1,
+		NULL, 0, // no starting frame preference
+		(usb_callback_func)acl_rx_complete, bdev);
+	if (err != B_OK) {
+		ERROR("%s: SCO RX queue failed: %s\n", __func__,
+			strerror(err));
+		free(buf);
+		return err;
+	}
+
+	TRACE("%s: SCO RX queued (%" B_PRIuSIZE " bytes)\n",
+		__func__, size);
+	return B_OK;
+#else
+	return B_NOT_SUPPORTED;
+#endif
 }
 
 
@@ -420,11 +461,17 @@ submit_tx_acl(bt_usb_dev* bdev, net_buffer* nbuf)
 status_t
 submit_tx_sco(bt_usb_dev* bdev)
 {
-
-	if (!GET_BIT(bdev->state, RUNNING)) {
+	if (!GET_BIT(bdev->state, RUNNING))
 		return B_DEV_NOT_READY;
-	}
 
-	// not yet implemented
-	return B_ERROR;
+#ifdef BLUETOOTH_SUPPORTS_SCO
+	if (bdev->iso_out_ep == NULL)
+		return B_DEV_NOT_READY;
+
+	// SCO TX will be implemented when SCO connections are established.
+	// The HFP/HSP profile layer will call this with audio frames.
+	return B_NOT_SUPPORTED;
+#else
+	return B_NOT_SUPPORTED;
+#endif
 }
