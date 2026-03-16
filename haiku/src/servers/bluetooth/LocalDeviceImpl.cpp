@@ -151,7 +151,16 @@ LocalDeviceImpl::ResetController()
 	void* cmd = buildReset(&cmdSize);
 	if (cmd != NULL) {
 		TRACE_BT("LocalDeviceImpl: Resetting HCI controller\n");
-		fHCIDelegate->IssueCommand(cmd, cmdSize);
+
+		BMessage* request = new BMessage;
+		request->AddInt16("eventExpected", HCI_EVENT_CMD_COMPLETE);
+		request->AddInt16("opcodeExpected",
+			PACK_OPCODE(OGF_CONTROL_BASEBAND, OCF_RESET));
+		AddWantedEvent(request);
+
+		if (fHCIDelegate->IssueCommand(cmd, cmdSize) == B_ERROR)
+			ClearWantedEvent(request);
+
 		free(cmd);
 		// Give controller time to reset
 		snooze(500000);
@@ -171,7 +180,17 @@ LocalDeviceImpl::DeleteControllerLinkKeys()
 	if (cmd != NULL) {
 		TRACE_BT("LocalDeviceImpl: Deleting all stored link keys "
 			"from controller\n");
-		fHCIDelegate->IssueCommand(cmd, cmdSize);
+
+		BMessage* request = new BMessage;
+		request->AddInt16("eventExpected", HCI_EVENT_CMD_COMPLETE);
+		request->AddInt16("opcodeExpected",
+			PACK_OPCODE(OGF_CONTROL_BASEBAND,
+				OCF_DELETE_STORED_LINK_KEY));
+		AddWantedEvent(request);
+
+		if (fHCIDelegate->IssueCommand(cmd, cmdSize) == B_ERROR)
+			ClearWantedEvent(request);
+
 		free(cmd);
 	}
 }
@@ -975,6 +994,7 @@ LocalDeviceImpl::CommandComplete(struct hci_ev_cmd_complete* event,
 		case PACK_OPCODE(OGF_LINK_CONTROL, OCF_USER_CONFIRMATION_REQUEST_REPLY):
 		case PACK_OPCODE(OGF_LINK_CONTROL, OCF_USER_CONFIRMATION_NEG_REPLY):
 		case PACK_OPCODE(OGF_CONTROL_BASEBAND, OCF_SET_EVENT_MASK):
+		case PACK_OPCODE(OGF_CONTROL_BASEBAND, OCF_DELETE_STORED_LINK_KEY):
 		case PACK_OPCODE(OGF_CONTROL_BASEBAND, OCF_RESET):
 		case PACK_OPCODE(OGF_CONTROL_BASEBAND, OCF_WRITE_SCAN_ENABLE):
 		case PACK_OPCODE(OGF_CONTROL_BASEBAND, OCF_WRITE_CLASS_OF_DEV):

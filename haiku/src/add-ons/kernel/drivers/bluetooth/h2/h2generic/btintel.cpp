@@ -40,7 +40,7 @@
 
 // Timeouts
 #define INTEL_CMD_TIMEOUT   2000000   // 2s for command TX
-#define INTEL_EVT_TIMEOUT   5000000   // 5s for event RX
+#define INTEL_EVT_TIMEOUT   10000000  // 10s for event RX
 #define INTEL_BOOT_TIMEOUT  1500000   // 1.5s for firmware boot after reset
 
 
@@ -279,40 +279,141 @@ btintel_send_cmd_nosync(bt_usb_dev* bdev, uint16 opcode,
 }
 
 
-// Drain any pending events from the interrupt endpoint.
-// After Intel Reset, the chip may send a Boot Complete vendor event
-// (and possibly others) that would confuse the next btintel_send_cmd_sync.
-static void
-btintel_drain_events(bt_usb_dev* bdev)
+// Send an Intel Secure Send (0xFC09) command via USB bulk OUT and wait for
+// the response on the bulk IN endpoint.  Linux btusb.c routes opcode 0xFC09
+// through alloc_bulk_urb() instead of alloc_ctrl_urb(), and in bootloader
+// mode reads events from bulk IN (btusb_recv_bulk_intel).
+//
+// The chip replies with a Vendor Event (0xFF, sub-event 0x06) on the bulk
+// IN endpoint.  We also accept Command Complete (0x0E) and Command Status
+// (0x0F) as valid responses.
+static status_t
+btintel_send_cmd_vendor_sync(bt_usb_dev* bdev, uint16 opcode,
+	const void* params, uint8 param_len)
 {
-	// Drain up to 5 events (Boot Complete + any queued notifications)
-	for (int attempt = 0; attempt < 5; attempt++) {
-		intel_sync_ctx ctx;
-		ctx.done = create_sem(0, "btintel_drain");
-		if (ctx.done < 0)
-			return;
-		ctx.status = B_ERROR;
-		ctx.actual_len = 0;
+	uint8 cmd[259];
+	cmd[0] = opcode & 0xFF;
+	cmd[1] = (opcode >> 8) & 0xFF;
+	cmd[2] = param_len;
+	if (param_len > 0 && params != NULL)
+		memcpy(cmd + 3, params, param_len);
 
-		uint8 buf[260];
-		status_t err = usb->queue_interrupt(bdev->intr_in_ep->handle,
-			buf, sizeof(buf), intel_sync_callback, &ctx);
-		if (err != B_OK) {
-			delete_sem(ctx.done);
-			return;
-		}
+	size_t cmd_len = 3 + param_len;
 
-		// Short timeout — just drain whatever is pending
-		err = acquire_sem_etc(ctx.done, 1, B_RELATIVE_TIMEOUT, 500000);
-		if (err != B_OK) {
-			// Timed out — nothing more pending, cancel and stop
-			usb->cancel_queued_transfers(bdev->intr_in_ep->handle);
-			delete_sem(ctx.done);
-			return;
-		}
-		delete_sem(ctx.done);
-		// Got an event — loop to check for more
+	// Queue bulk IN to receive the response event.
+	// In Intel bootloader mode, events come on bulk IN, not interrupt.
+	intel_sync_ctx evt_ctx;
+	evt_ctx.done = create_sem(0, "btintel_evt");
+	if (evt_ctx.done < 0)
+		return evt_ctx.done;
+	evt_ctx.status = B_ERROR;
+	evt_ctx.actual_len = 0;
+
+	uint8 evt_buf[260];
+	status_t err = usb->queue_bulk(bdev->bulk_in_ep->handle,
+		evt_buf, sizeof(evt_buf), intel_sync_callback, &evt_ctx);
+	if (err != B_OK) {
+		delete_sem(evt_ctx.done);
+		return err;
 	}
+
+	// Send command via USB bulk OUT (not control endpoint).
+	// Linux btusb_send_frame_intel routes 0xFC09 through bulk.
+	intel_sync_ctx cmd_ctx;
+	cmd_ctx.done = create_sem(0, "btintel_cmd");
+	if (cmd_ctx.done < 0) {
+		usb->cancel_queued_transfers(bdev->bulk_in_ep->handle);
+		delete_sem(evt_ctx.done);
+		return cmd_ctx.done;
+	}
+	cmd_ctx.status = B_ERROR;
+	cmd_ctx.actual_len = 0;
+
+	err = usb->queue_bulk(bdev->bulk_out_ep->handle,
+		cmd, cmd_len, intel_sync_callback, &cmd_ctx);
+	if (err != B_OK) {
+		usb->cancel_queued_transfers(bdev->bulk_in_ep->handle);
+		delete_sem(cmd_ctx.done);
+		delete_sem(evt_ctx.done);
+		return err;
+	}
+
+	// Wait for command TX
+	err = acquire_sem_etc(cmd_ctx.done, 1, B_RELATIVE_TIMEOUT,
+		INTEL_CMD_TIMEOUT);
+	delete_sem(cmd_ctx.done);
+	if (err != B_OK) {
+		ERROR("btintel: vendor_sync: cmd TX timeout for opcode "
+			"0x%04x\n", opcode);
+		usb->cancel_queued_transfers(bdev->bulk_in_ep->handle);
+		delete_sem(evt_ctx.done);
+		return err;
+	}
+	if (cmd_ctx.status != B_OK) {
+		ERROR("btintel: vendor_sync: cmd TX failed for opcode "
+			"0x%04x: %s\n", opcode, strerror(cmd_ctx.status));
+		usb->cancel_queued_transfers(bdev->bulk_in_ep->handle);
+		delete_sem(evt_ctx.done);
+		return cmd_ctx.status;
+	}
+
+	// Wait for event on bulk IN
+	err = acquire_sem_etc(evt_ctx.done, 1, B_RELATIVE_TIMEOUT,
+		INTEL_EVT_TIMEOUT);
+	if (err != B_OK) {
+		ERROR("btintel: vendor_sync: evt RX timeout for opcode "
+			"0x%04x\n", opcode);
+		usb->cancel_queued_transfers(bdev->bulk_in_ep->handle);
+		delete_sem(evt_ctx.done);
+		return err;
+	}
+	delete_sem(evt_ctx.done);
+
+	if (evt_ctx.status != B_OK) {
+		ERROR("btintel: vendor_sync: evt transfer error for "
+			"opcode 0x%04x: %s\n", opcode,
+			strerror(evt_ctx.status));
+		return evt_ctx.status;
+	}
+
+	// Parse response event
+	if (evt_ctx.actual_len < 1)
+		return B_BAD_DATA;
+
+	uint8 evt_code = evt_buf[0];
+	ERROR("btintel: vendor_sync: got evt 0x%02x (%" B_PRIuSIZE
+		" bytes) for opcode 0x%04x\n", evt_code,
+		evt_ctx.actual_len, opcode);
+
+	if (evt_code == 0xFF) {
+		// Vendor event — check sub-event 0x06 (Secure Send Result)
+		// Format: FF [len] [sub_evt] [result...] where result byte
+		// at offset 4 is status (0x00 = success)
+		if (evt_ctx.actual_len >= 5 && evt_buf[4] != 0x00) {
+			ERROR("btintel: vendor event error status 0x%02x "
+				"for opcode 0x%04x\n", evt_buf[4], opcode);
+			return B_ERROR;
+		}
+		return B_OK;
+	}
+
+	if (evt_code == 0x0E) {
+		// Command Complete — check status at byte 5
+		if (evt_ctx.actual_len >= 6 && evt_buf[5] != 0x00) {
+			ERROR("btintel: CC error status 0x%02x for "
+				"opcode 0x%04x\n", evt_buf[5], opcode);
+			return B_ERROR;
+		}
+		return B_OK;
+	}
+
+	if (evt_code == 0x0F)
+		return B_OK;
+
+	// Unexpected event type
+	ERROR("btintel: unexpected event 0x%02x for opcode 0x%04x\n",
+		evt_code, opcode);
+	return B_OK; // non-fatal, continue anyway
 }
 
 
@@ -525,14 +626,12 @@ btintel_load_firmware_file(const char* filename, uint8** data, size_t* size)
 
 // Send data via Intel Secure Send (0xFC09).
 // Splits data into 252-byte chunks, each prefixed with fragment_type byte.
-// fragment_type: 0x00=RSA signature, 0x01=firmware data, 0x03=ECDSA signature
+// fragment_type: 0x00=CSS header, 0x01=firmware data, 0x02=RSA signature,
+//               0x03=RSA public key (or ECDSA on CSS v2)
 //
-// Intel controllers do NOT respond to Secure Send with a standard Command
-// Complete (0x0E) event.  Instead, they send Vendor Specific Events (0xFF)
-// with sub-event 0x06 (Secure Send Result).  Therefore we use fire-and-forget
-// mode: send each chunk via USB control transfer, wait only for USB TX
-// completion, and do not wait for HCI events.  Any pending vendor events are
-// drained after the entire firmware download + Intel Reset sequence.
+// Each chunk is sent synchronously — we wait for Command Complete before
+// sending the next one, matching the Linux kernel's btintel_secure_send
+// which uses __hci_cmd_sync for each chunk.
 static status_t
 btintel_secure_send(bt_usb_dev* bdev, uint8 fragment_type,
 	const uint8* data, size_t len)
@@ -544,12 +643,12 @@ btintel_secure_send(bt_usb_dev* bdev, uint8 fragment_type,
 		cmd_param[0] = fragment_type;
 		memcpy(cmd_param + 1, data, chunk);
 
-		status_t err = btintel_send_cmd_nosync(bdev,
+		status_t err = btintel_send_cmd_vendor_sync(bdev,
 			INTEL_HCI_SECURE_SEND, cmd_param,
 			(uint8)(chunk + 1));
 		if (err != B_OK) {
-			ERROR("btintel: Secure Send (type=0x%02x) TX failed "
-				"at offset %" B_PRIuSIZE ": %s\n",
+			ERROR("btintel: secure_send type=0x%02x failed "
+				"at remaining %" B_PRIuSIZE ": %s\n",
 				fragment_type, len, strerror(err));
 			return err;
 		}
@@ -562,52 +661,124 @@ btintel_secure_send(bt_usb_dev* bdev, uint8 fragment_type,
 
 
 // Download firmware to the Intel controller.
-// The .sfi file layout:
-//   [8 bytes CSS preamble]
-//   [644 bytes RSA signature header]
-//   [optional 320 bytes ECDSA signature header, if CSS version 2]
-//   [HCI command sequence — firmware payload]
+// The .sfi file layout (matching Linux btintel_sfi_rsa_header_secure_send):
+//   [0..127]   CSS header  (128 bytes) → Secure Send type 0x00
+//   [128..383]  RSA PKey    (256 bytes) → Secure Send type 0x03
+//   [384..387]  padding     (4 bytes, not sent)
+//   [388..643]  RSA Sign    (256 bytes) → Secure Send type 0x02
+//   [644..]     HCI command payload     → Secure Send type 0x01
 //
-// The signature headers are sent via Secure Send (0xFC09) for controller
-// firmware authentication. The firmware payload commands are accumulated
-// up to 0xFC09 boundaries and sent as Secure Send data fragments.
+// CSS v2 (TLV path) adds an ECDSA header after RSA; payload starts at 964.
+//
+// The firmware payload contains HCI commands (3-byte header: opcode + plen).
+// Commands are accumulated until the fragment reaches 4-byte alignment,
+// then sent via Secure Send type 0x01.  This matches the Linux kernel's
+// btintel_download_firmware_payload algorithm.
 static status_t
 btintel_download_firmware(bt_usb_dev* bdev, const uint8* fw_data,
 	size_t fw_size)
 {
-	size_t offset = INTEL_CSS_HEADER_OFFSET;
+	// Send RSA header in 3 fragments matching Linux btintel_sfi_rsa_header_secure_send():
+	//   CSS header (128 bytes) at fw_data+0   → type 0x00
+	//   Public Key (256 bytes) at fw_data+128  → type 0x03
+	//   Signature  (256 bytes) at fw_data+388  → type 0x02
+	// Note: 4-byte gap between PKey and Sign (offsets 384-387).
+	// Payload starts at RSA_HEADER_LEN (644).
 
-	if (fw_size < offset + 4) {
-		ERROR("btintel: firmware too small for CSS header\n");
-		return B_BAD_DATA;
-	}
-
-	// Read CSS version to determine header sizes
-	uint32 css_ver;
-	memcpy(&css_ver, fw_data + offset, sizeof(css_ver));
-
-	// Send RSA signature header via Secure Send (type=0x00)
-	if (fw_size < offset + INTEL_CSS_RSA_HEADER_SIZE) {
+	if (fw_size < INTEL_CSS_RSA_HEADER_SIZE) {
 		ERROR("btintel: firmware too small for RSA header\n");
 		return B_BAD_DATA;
 	}
-	ERROR("btintel: sending RSA signature header (%d bytes)\n",
-		INTEL_CSS_RSA_HEADER_SIZE);
+
+	// Drain any stale events from the interrupt endpoint.
+	// After boot params read, the chip may have pending vendor events
+	// that would be consumed by our first queue_interrupt, causing us
+	// to miss the actual Secure Send response.
+	for (int drain = 0; drain < 3; drain++) {
+		intel_sync_ctx drain_ctx;
+		drain_ctx.done = create_sem(0, "btintel_drain");
+		if (drain_ctx.done < 0)
+			break;
+		drain_ctx.status = B_ERROR;
+		drain_ctx.actual_len = 0;
+
+		uint8 drain_buf[260];
+		status_t derr = usb->queue_interrupt(bdev->intr_in_ep->handle,
+			drain_buf, sizeof(drain_buf), intel_sync_callback,
+			&drain_ctx);
+		if (derr != B_OK) {
+			delete_sem(drain_ctx.done);
+			break;
+		}
+		derr = acquire_sem_etc(drain_ctx.done, 1, B_RELATIVE_TIMEOUT,
+			500000); // 500ms
+		if (derr != B_OK) {
+			// Timeout = no stale event, good
+			usb->cancel_queued_transfers(bdev->intr_in_ep->handle);
+			delete_sem(drain_ctx.done);
+			ERROR("btintel: drain: no stale events (drain %d)\n",
+				drain);
+			break;
+		}
+		delete_sem(drain_ctx.done);
+		ERROR("btintel: drain: consumed stale event 0x%02x "
+			"(%" B_PRIuSIZE " bytes, status %s)\n",
+			drain_buf[0], drain_ctx.actual_len,
+			strerror(drain_ctx.status));
+	}
+
+	// Probe: send a harmless vendor command to verify USB is working.
+	// Use Read Version (0xFC05) with param 0xFF as a ping.
+	{
+		uint8 probe_resp[16];
+		size_t probe_len = 0;
+		uint8 probe_param = 0xFF;
+		status_t perr = btintel_send_cmd_sync(bdev, 0xFC05,
+			&probe_param, 1, probe_resp, sizeof(probe_resp),
+			&probe_len);
+		ERROR("btintel: pre-download probe: %s (%" B_PRIuSIZE
+			" bytes)\n", strerror(perr), probe_len);
+	}
+
+	// Fragment 1: CSS header (128 bytes at offset 0, type 0x00)
+	ERROR("btintel: sending CSS header (128 bytes, type 0x00)\n");
 	status_t err = btintel_secure_send(bdev, 0x00,
-		fw_data + offset, INTEL_CSS_RSA_HEADER_SIZE);
+		fw_data, 128);
 	if (err != B_OK) {
-		ERROR("btintel: RSA header send failed: %s\n", strerror(err));
+		ERROR("btintel: CSS header send failed: %s\n", strerror(err));
 		return err;
 	}
-	offset += INTEL_CSS_RSA_HEADER_SIZE;
 
-	// CSS version 2: also send ECDSA signature header (type=0x03)
+	// Fragment 2: RSA public key (256 bytes at offset 128, type 0x03)
+	ERROR("btintel: sending RSA PKey (256 bytes, type 0x03)\n");
+	err = btintel_secure_send(bdev, 0x03,
+		fw_data + 128, 256);
+	if (err != B_OK) {
+		ERROR("btintel: RSA PKey send failed: %s\n", strerror(err));
+		return err;
+	}
+
+	// Fragment 3: RSA signature (256 bytes at offset 388, type 0x02)
+	ERROR("btintel: sending RSA Sign (256 bytes, type 0x02)\n");
+	err = btintel_secure_send(bdev, 0x02,
+		fw_data + 388, 256);
+	if (err != B_OK) {
+		ERROR("btintel: RSA Sign send failed: %s\n", strerror(err));
+		return err;
+	}
+
+	// Payload starts at INTEL_CSS_RSA_HEADER_SIZE (644)
+	size_t offset = INTEL_CSS_RSA_HEADER_SIZE; // 644
+
+	// CSS v2: also has ECDSA header after RSA, payload moves further
+	uint32 css_ver;
+	memcpy(&css_ver, fw_data + INTEL_CSS_HEADER_OFFSET, sizeof(css_ver));
 	if (css_ver == 0x00020000) {
 		if (fw_size < offset + INTEL_CSS_ECDSA_HEADER_SIZE) {
 			ERROR("btintel: firmware too small for ECDSA header\n");
 			return B_BAD_DATA;
 		}
-		ERROR("btintel: sending ECDSA signature header (%d bytes)\n",
+		ERROR("btintel: sending ECDSA header (%d bytes)\n",
 			INTEL_CSS_ECDSA_HEADER_SIZE);
 		err = btintel_secure_send(bdev, 0x03,
 			fw_data + offset, INTEL_CSS_ECDSA_HEADER_SIZE);
@@ -627,39 +798,37 @@ btintel_download_firmware(bt_usb_dev* bdev, const uint8* fw_data,
 	}
 
 	ERROR("btintel: downloading firmware payload (%" B_PRIuSIZE
-		" bytes)\n", fw_size - offset);
+		" bytes from offset %" B_PRIuSIZE ")\n",
+		fw_size - offset, offset);
 
-	// The firmware payload is a sequence of HCI commands:
-	//   [opcode_lo][opcode_hi][param_len][params...]
-	// Commands are accumulated into fragments delimited by Secure Send
-	// commands (opcode 0xFC09). Each accumulated fragment is sent to the
-	// controller via Secure Send with type=0x01 (firmware data).
+	// Walk the firmware payload as HCI commands, accumulate into
+	// fragments, and send each fragment via Secure Send (type 0x01)
+	// when the accumulated size reaches 4-byte alignment.
+	// This matches Linux's btintel_download_firmware_payload.
 	const uint8* frag_start = fw_data + offset;
 	size_t frag_len = 0;
 	uint32 frag_count = 0;
 
 	while (offset + 3 <= fw_size) {
-		uint16 cmd_opcode = fw_data[offset] | (fw_data[offset + 1] << 8);
-		uint8 cmd_len = fw_data[offset + 2];
+		uint8 cmd_plen = fw_data[offset + 2];
 
-		if (offset + 3 + cmd_len > fw_size) {
+		if (offset + 3 + cmd_plen > fw_size) {
 			ERROR("btintel: firmware truncated at offset "
 				"%" B_PRIuSIZE "\n", offset);
 			return B_BAD_DATA;
 		}
 
-		frag_len += 3 + cmd_len;
-		offset += 3 + cmd_len;
+		frag_len += 3 + cmd_plen;
+		offset += 3 + cmd_plen;
 
-		// When we hit a Secure Send command (0xFC09) in the file,
-		// send the accumulated fragment as firmware data
-		if (cmd_opcode == INTEL_HCI_SECURE_SEND) {
+		// Send fragment when accumulated size is 4-byte aligned
+		if ((frag_len % 4) == 0) {
 			err = btintel_secure_send(bdev, 0x01,
 				frag_start, frag_len);
 			if (err != B_OK) {
 				ERROR("btintel: firmware fragment #%" B_PRIu32
-					" failed: %s\n",
-					frag_count, strerror(err));
+					" (%" B_PRIuSIZE " bytes) failed: %s\n",
+					frag_count, frag_len, strerror(err));
 				return err;
 			}
 			frag_start = fw_data + offset;
@@ -672,7 +841,7 @@ btintel_download_firmware(bt_usb_dev* bdev, const uint8* fw_data,
 		}
 	}
 
-	// Send any remaining data
+	// Send any remaining data (should not happen with well-formed firmware)
 	if (frag_len > 0) {
 		err = btintel_secure_send(bdev, 0x01, frag_start, frag_len);
 		if (err != B_OK) {
@@ -684,12 +853,7 @@ btintel_download_firmware(bt_usb_dev* bdev, const uint8* fw_data,
 	}
 
 	ERROR("btintel: firmware download complete (%" B_PRIu32
-		" fragments), draining pending events\n", frag_count);
-
-	// Drain vendor events (Secure Send Results) that accumulated during
-	// the fire-and-forget download.  The chip sends 0xFF sub-event 0x06
-	// for each stage (RSA header, ECDSA header, firmware fragments).
-	btintel_drain_events(bdev);
+		" fragments)\n", frag_count);
 
 	return B_OK;
 }
@@ -824,22 +988,37 @@ btintel_download_and_reset(bt_usb_dev* bdev, const char* fw_name)
 		return err;
 	}
 
+	// Give the chip time to verify the firmware signature before
+	// issuing Intel Reset.  Linux btintel uses msleep(150) here.
+	ERROR("btintel: firmware sent, waiting 150ms for signature "
+		"verification\n");
+	snooze(150000);
+
 	// Intel Reset to boot into the downloaded firmware.
-	// After this the chip reboots its USB interface — the current
-	// USB handle becomes invalid.  Do NOT try to communicate with
-	// the device after sending this command.
 	uint8 reset_params[] = {
 		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00
 	};
 	btintel_send_cmd_nosync(bdev, INTEL_HCI_RESET,
 		reset_params, sizeof(reset_params));
 
-	ERROR("btintel: firmware sent, device rebooting into "
-		"operational mode\n");
+	ERROR("btintel: Intel Reset issued, waiting for USB "
+		"disconnect\n");
 
-	// Return a distinct status to tell the caller the device is
-	// rebooting — this is NOT an error, just a signal to stop
-	// using the current USB handle.
+	// Wait for the chip to physically disconnect from USB before
+	// returning.  If we return too quickly, device_added completes
+	// while the old USB handle is still valid.  The hub then sees
+	// the reconnection as "new device on a port already in use"
+	// because device_removed hasn't had a chance to run yet.
+	// The chip needs ~200-500ms to start USB disconnect signaling.
+	// We wait 1s to be safe.
+	snooze(1000000);
+
+	ERROR("btintel: post-reset delay done, device rebooting\n");
+
+	// Return B_SHUTTING_DOWN to tell device_added that the chip is
+	// rebooting.  device_added will register the device handle so
+	// the USB stack can cleanly call device_removed on disconnect,
+	// then the chip reconnects with operational firmware.
 	return B_SHUTTING_DOWN;
 }
 
@@ -1051,16 +1230,32 @@ btintel_setup(bt_usb_dev* bdev)
 			return err;
 		}
 
+		// Give the chip time to verify firmware signature.
+		ERROR("btintel: legacy: waiting 150ms for signature "
+			"verification\n");
+		snooze(150000);
+
 		// Intel Reset — device will reboot its USB interface.
-		// Do NOT read version afterwards; the USB handle is dead.
 		uint8 reset_params[] = {
 			0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00
 		};
 		btintel_send_cmd_nosync(bdev, INTEL_HCI_RESET,
 			reset_params, sizeof(reset_params));
 
-		ERROR("btintel: firmware sent, device rebooting into "
-			"operational mode\n");
+		ERROR("btintel: legacy: Intel Reset issued, waiting "
+			"for USB disconnect\n");
+
+		// Wait for chip to physically disconnect from USB.
+		snooze(1000000);
+
+		ERROR("btintel: legacy: post-reset delay done\n");
+
+		// Return B_SHUTTING_DOWN so device_added knows the chip
+		// is rebooting and registers the device handle for clean
+		// USB disconnect/reconnect.  When the chip reconnects
+		// with operational firmware (fw_variant 0x23), the next
+		// device_added call will see B_OK from the "already
+		// operational" check and proceed normally.
 		return B_SHUTTING_DOWN;
 	}
 

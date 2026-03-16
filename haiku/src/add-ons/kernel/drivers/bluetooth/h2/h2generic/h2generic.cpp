@@ -385,14 +385,22 @@ device_added(usb_device dev, void** cookie)
 			status_t intelStatus = btintel_setup(new_bt_dev);
 			if (intelStatus == B_SHUTTING_DOWN) {
 				// Firmware sent, device is rebooting.  It will
-				// reconnect on USB and device_added will be called
-				// again.  Don't register this handle.
+				// disconnect from USB and reconnect with operational
+				// firmware.  We MUST register this device handle
+				// (return B_OK) so that the USB stack properly
+				// tracks the port.  Otherwise, when the chip
+				// reconnects, the USB stack sees "new device on
+				// a port that is already in use" and fails.
+				// The device_removed callback will clean up when
+				// the USB disconnect happens (~1s after Intel Reset).
 				sIntelFwAttempts++;
 				ERROR("%s: Intel firmware sent (attempt %" B_PRId32
-					"), waiting for device reboot\n",
+					"), registering device to allow clean USB "
+					"disconnect/reconnect cycle\n",
 					__func__, sIntelFwAttempts);
-				err = B_SHUTTING_DOWN;
-				goto bail;
+				new_bt_dev->connected = true;
+				*cookie = new_bt_dev;
+				return B_OK;
 			} else if (intelStatus == B_OK) {
 				ERROR("%s: Intel firmware setup complete\n",
 					__func__);
