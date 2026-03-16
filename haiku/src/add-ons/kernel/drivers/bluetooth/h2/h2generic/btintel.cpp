@@ -242,42 +242,6 @@ retry_event:
 }
 
 
-// Send an HCI command without waiting for a response event.
-// Used for Intel Reset (0xFC01), where the chip reboots immediately.
-static status_t
-btintel_send_cmd_nosync(bt_usb_dev* bdev, uint16 opcode,
-	const void* params, uint8 param_len)
-{
-	uint8 cmd[259];
-	cmd[0] = opcode & 0xFF;
-	cmd[1] = (opcode >> 8) & 0xFF;
-	cmd[2] = param_len;
-	if (param_len > 0 && params != NULL)
-		memcpy(cmd + 3, params, param_len);
-
-	intel_sync_ctx cmd_ctx;
-	cmd_ctx.done = create_sem(0, "btintel_cmd");
-	if (cmd_ctx.done < 0)
-		return cmd_ctx.done;
-	cmd_ctx.status = B_ERROR;
-	cmd_ctx.actual_len = 0;
-
-	status_t err = usb->queue_request(bdev->dev, USB_TYPE_CLASS, 0, 0, 0,
-		3 + param_len, cmd, intel_sync_callback, &cmd_ctx);
-	if (err != B_OK) {
-		delete_sem(cmd_ctx.done);
-		return err;
-	}
-
-	err = acquire_sem_etc(cmd_ctx.done, 1, B_RELATIVE_TIMEOUT,
-		INTEL_CMD_TIMEOUT);
-	delete_sem(cmd_ctx.done);
-
-	if (err != B_OK)
-		return err;
-	return cmd_ctx.status;
-}
-
 
 // Send an Intel Secure Send (0xFC09) command via USB bulk OUT and wait for
 // the response on the bulk IN endpoint.  Linux btusb.c routes opcode 0xFC09
@@ -624,6 +588,40 @@ btintel_load_firmware_file(const char* filename, uint8** data, size_t* size)
 }
 
 
+// Scan firmware payload for CMD_WRITE_BOOT_PARAMS (0xFC0E) and extract the
+// boot address.  This address is passed to Intel Reset so the chip knows
+// where to start executing the downloaded firmware.
+// Matches Linux btintel_firmware_version().
+#define CMD_WRITE_BOOT_PARAMS 0xFC0E
+
+static status_t
+btintel_extract_boot_addr(const uint8* fw_data, size_t fw_size,
+	uint32* boot_addr)
+{
+	size_t offset = INTEL_CSS_RSA_HEADER_SIZE; // payload starts at 644
+
+	while (offset + 3 <= fw_size) {
+		uint16 opcode;
+		memcpy(&opcode, fw_data + offset, sizeof(opcode));
+		// opcode is little-endian, same as host on x86
+		uint8 plen = fw_data[offset + 2];
+
+		if (opcode == CMD_WRITE_BOOT_PARAMS && plen >= 4) {
+			memcpy(boot_addr, fw_data + offset + 3, sizeof(*boot_addr));
+			ERROR("btintel: found boot_addr=0x%08" B_PRIx32
+				" at firmware offset %" B_PRIuSIZE "\n",
+				*boot_addr, offset);
+			return B_OK;
+		}
+
+		offset += 3 + plen;
+	}
+
+	ERROR("btintel: CMD_WRITE_BOOT_PARAMS not found in firmware\n");
+	return B_ENTRY_NOT_FOUND;
+}
+
+
 // Send data via Intel Secure Send (0xFC09).
 // Splits data into 252-byte chunks, each prefixed with fragment_type byte.
 // fragment_type: 0x00=CSS header, 0x01=firmware data, 0x02=RSA signature,
@@ -688,56 +686,6 @@ btintel_download_firmware(bt_usb_dev* bdev, const uint8* fw_data,
 	if (fw_size < INTEL_CSS_RSA_HEADER_SIZE) {
 		ERROR("btintel: firmware too small for RSA header\n");
 		return B_BAD_DATA;
-	}
-
-	// Drain any stale events from the interrupt endpoint.
-	// After boot params read, the chip may have pending vendor events
-	// that would be consumed by our first queue_interrupt, causing us
-	// to miss the actual Secure Send response.
-	for (int drain = 0; drain < 3; drain++) {
-		intel_sync_ctx drain_ctx;
-		drain_ctx.done = create_sem(0, "btintel_drain");
-		if (drain_ctx.done < 0)
-			break;
-		drain_ctx.status = B_ERROR;
-		drain_ctx.actual_len = 0;
-
-		uint8 drain_buf[260];
-		status_t derr = usb->queue_interrupt(bdev->intr_in_ep->handle,
-			drain_buf, sizeof(drain_buf), intel_sync_callback,
-			&drain_ctx);
-		if (derr != B_OK) {
-			delete_sem(drain_ctx.done);
-			break;
-		}
-		derr = acquire_sem_etc(drain_ctx.done, 1, B_RELATIVE_TIMEOUT,
-			500000); // 500ms
-		if (derr != B_OK) {
-			// Timeout = no stale event, good
-			usb->cancel_queued_transfers(bdev->intr_in_ep->handle);
-			delete_sem(drain_ctx.done);
-			ERROR("btintel: drain: no stale events (drain %d)\n",
-				drain);
-			break;
-		}
-		delete_sem(drain_ctx.done);
-		ERROR("btintel: drain: consumed stale event 0x%02x "
-			"(%" B_PRIuSIZE " bytes, status %s)\n",
-			drain_buf[0], drain_ctx.actual_len,
-			strerror(drain_ctx.status));
-	}
-
-	// Probe: send a harmless vendor command to verify USB is working.
-	// Use Read Version (0xFC05) with param 0xFF as a ping.
-	{
-		uint8 probe_resp[16];
-		size_t probe_len = 0;
-		uint8 probe_param = 0xFF;
-		status_t perr = btintel_send_cmd_sync(bdev, 0xFC05,
-			&probe_param, 1, probe_resp, sizeof(probe_resp),
-			&probe_len);
-		ERROR("btintel: pre-download probe: %s (%" B_PRIuSIZE
-			" bytes)\n", strerror(perr), probe_len);
 	}
 
 	// Fragment 1: CSS header (128 bytes at offset 0, type 0x00)
@@ -979,6 +927,10 @@ btintel_download_and_reset(bt_usb_dev* bdev, const char* fw_name)
 		return err;
 	}
 
+	// Extract boot address before downloading.
+	uint32 boot_addr = 0;
+	btintel_extract_boot_addr(fw_data, fw_size, &boot_addr);
+
 	// Download firmware via Secure Send
 	err = btintel_download_firmware(bdev, fw_data, fw_size);
 	free(fw_data);
@@ -994,12 +946,23 @@ btintel_download_and_reset(bt_usb_dev* bdev, const char* fw_name)
 		"verification\n");
 	snooze(150000);
 
-	// Intel Reset to boot into the downloaded firmware.
-	uint8 reset_params[] = {
-		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00
+	// Intel Reset — boot into the downloaded firmware.
+	struct {
+		uint8 reset_type;
+		uint8 patch_enable;
+		uint8 ddc_reload;
+		uint8 boot_option;
+		uint32 boot_param;
+	} __attribute__((packed)) reset_params = {
+		0x00, 0x01, 0x00, 0x01, boot_addr
 	};
-	btintel_send_cmd_nosync(bdev, INTEL_HCI_RESET,
-		reset_params, sizeof(reset_params));
+
+	ERROR("btintel: sending Intel Reset "
+		"(boot_addr=0x%08" B_PRIx32 ")\n", boot_addr);
+
+	btintel_send_cmd_sync(bdev, INTEL_HCI_RESET,
+		&reset_params, sizeof(reset_params),
+		NULL, 0, NULL);
 
 	ERROR("btintel: Intel Reset issued, waiting for USB "
 		"disconnect\n");
@@ -1221,6 +1184,10 @@ btintel_setup(bt_usb_dev* bdev)
 			return err;
 		}
 
+		// Extract boot address before downloading (need fw_data).
+		uint32 boot_addr = 0;
+		btintel_extract_boot_addr(fw_data, fw_size, &boot_addr);
+
 		err = btintel_download_firmware(bdev, fw_data, fw_size);
 		free(fw_data);
 
@@ -1231,21 +1198,39 @@ btintel_setup(bt_usb_dev* bdev)
 		}
 
 		// Give the chip time to verify firmware signature.
+		// Linux btintel uses msleep(150).
 		ERROR("btintel: legacy: waiting 150ms for signature "
 			"verification\n");
 		snooze(150000);
 
-		// Intel Reset — device will reboot its USB interface.
-		uint8 reset_params[] = {
-			0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00
+		// Intel Reset — boot into the downloaded firmware.
+		// Params match Linux btintel_send_intel_reset():
+		//   reset_type=0, patch_enable=1, ddc_reload=0,
+		//   boot_option=1, boot_param=boot_addr
+		struct {
+			uint8 reset_type;
+			uint8 patch_enable;
+			uint8 ddc_reload;
+			uint8 boot_option;
+			uint32 boot_param;
+		} __attribute__((packed)) reset_params = {
+			0x00, 0x01, 0x00, 0x01, boot_addr
 		};
-		btintel_send_cmd_nosync(bdev, INTEL_HCI_RESET,
-			reset_params, sizeof(reset_params));
+
+		ERROR("btintel: legacy: sending Intel Reset "
+			"(boot_addr=0x%08" B_PRIx32 ")\n", boot_addr);
+
+		// Linux uses __hci_cmd_sync for Intel Reset (goes via
+		// control endpoint, not bulk — only 0xFC09 uses bulk).
+		btintel_send_cmd_sync(bdev, INTEL_HCI_RESET,
+			&reset_params, sizeof(reset_params),
+			NULL, 0, NULL);
 
 		ERROR("btintel: legacy: Intel Reset issued, waiting "
 			"for USB disconnect\n");
 
 		// Wait for chip to physically disconnect from USB.
+		// The chip needs ~200-500ms to start USB disconnect.
 		snooze(1000000);
 
 		ERROR("btintel: legacy: post-reset delay done\n");
