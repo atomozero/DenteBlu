@@ -189,5 +189,10 @@ SimpleTest BluetoothSendFile :
 	: be libbluetooth.so network tracker [ TargetLibsupc++ ]
 ;
 
+SimpleTest bt_media_addon_test :
+	bt_media_addon_test.cpp
+	: be media [ TargetLibsupc++ ]
+;
+
 SubInclude HAIKU_TOP src tests kits bluetooth l2capClient ;
 SubInclude HAIKU_TOP src tests kits bluetooth smp_crypto ;

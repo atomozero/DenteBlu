@@ -1,0 +1,9 @@
+SubDir HAIKU_TOP src add-ons media bluetooth_audio ;
+
+UsePrivateHeaders bluetooth shared ;
+
+Addon bluetooth_audio :
+	BluetoothAudioAddOn.cpp
+	BluetoothAudioNode.cpp
+	: be media libbluetooth.so [ TargetLibsupc++ ]
+;
