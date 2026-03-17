@@ -219,20 +219,37 @@ Regole critiche:
 
 ## Cosa manca per compatibilita' 100% BT (rispetto a Linux/FreeBSD)
 
-Questa analisi non e' ancora stata completata formalmente, ma i gap principali:
+Analisi completata marzo 2026. Lista dettagliata con stime e priorita' in `TODO.md`.
 
-1. **SCO data path nel driver USB** — il codice ScoSocket manda comandi HCI
-   per setup SCO, ma il trasferimento dati isocrono USB non e' implementato
-   nel driver h2generic (endpoint SCO non attivati)
-2. **L2CAP CoC (Connection-oriented Channels)** — per BLE data transfer
-   ad alta velocita', manca il signaling LE Credit Based Connection
-3. **GATT server** — abbiamo solo GATT client; per fare da peripheral serve
-   anche un GATT server
-4. **Advertising** — manca la possibilita' di fare advertising BLE
-5. **Extended Advertising / Coded PHY** — BT 5.0+ features
-6. **LE Privacy** — RPA (Resolvable Private Address) non implementato
-7. **Mesh** — BT Mesh non implementato
-8. **LE Audio (LC3)** — codec LC3 per BT 5.2+ audio non implementato
+### Priorita' alta (bloccano use-case reali)
+
+1. **SCO data path nel driver USB** (~500 righe) — il codice ScoSocket manda comandi HCI
+   per setup SCO, e gli endpoint isochronous sono enumerati, ma il trasferimento dati
+   effettivo non e' implementato. Blocca audio voce HFP.
+   - File: `h2generic.cpp`, `h2transactions.cpp`
+   - Dipendenza: fix XHCI isoc (`tools/haiku_ticket_xhci_isoc.md`)
+
+2. **Test hardware profili audio** — A2DP Source, AVRCP Target, HFP AG, SCO sono
+   completi con unit test ma mai verificati con cuffie BT reali.
+
+3. **Fix kernel smp.cpp** — bug Haiku (non DenteBlu) che causa KDL su Tiger Lake.
+   Fix pronta in `smp-fix-ticket.md`, da proporre upstream.
+
+### Priorita' media (miglioramenti significativi)
+
+4. **GATT server** (~800 righe) — solo client implementato; serve per fare da
+   peripheral BLE (esporre servizi, beacon)
+5. **BLE advertising** (~300 righe) — possiamo fare scan ma non advertising
+6. **L2CAP LE CoC** (~600 righe) — per BLE data transfer ad alta velocita'
+7. **LE Privacy / RPA** (~400 righe) — indirizzi randomizzati BLE per pairing persistente
+8. **Bluetooth HID** (~1000 righe) — mouse e tastiere BT, input_server add-on.
+   Alta richiesta dalla community Haiku.
+
+### Priorita' bassa (spec BT 5.0+)
+
+9. **Extended Advertising / Coded PHY** — BT 5.0, richiede controller 5.0+
+10. **LE Audio / LC3** (~3000+ righe) — BT 5.2, nuovo subsystem completo
+11. **Bluetooth Mesh** (~5000+ righe) — networking IoT
 
 ## Come contribuire
 
