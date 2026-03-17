@@ -1,47 +1,47 @@
 # DenteBlu
 
-Stack Bluetooth completo per Haiku OS. Classic (BR/EDR) e BLE, dal driver USB fino ai profili applicativi.
+Complete Bluetooth stack (Classic BR/EDR + BLE) for Haiku OS, from USB driver to application profiles.
 
-## Stato
+## Status
 
-Lo stack funziona con dongle USB Bluetooth 2.0 (chipset BCM2045, CSR, ecc.) su Haiku R1 beta5. Pairing, SDP discovery, e profili SPP/RFCOMM sono operativi.
+The stack works with USB Bluetooth 2.0 dongles (BCM2045, CSR chipsets, etc.) on Haiku R1 beta5. Pairing, SDP discovery, and SPP/RFCOMM profiles are operational.
 
-Per i chip **Intel AX201** (USB 8087:0026) il firmware loader è implementato e completa il download del firmware (801KB, 3233 frammenti via Secure Send). Il chip reboota con firmware operativo. Il lavoro di integrazione con il bluetooth_server è in corso — vedi la sezione [Intel firmware loader](#intel-firmware-loader).
+For **Intel AX201** chips (USB 8087:0026), the firmware loader is implemented and completes the full download (801KB, 3233 fragments via Secure Send). The chip reboots with operational firmware. Integration with bluetooth_server is in progress — see [Intel firmware loader](#intel-firmware-loader).
 
-## Architettura
+## Architecture
 
 ```
-Applicazioni / Preferences GUI
+Applications / Preferences GUI
         │ BMessage IPC
-   libbluetooth.so  (profili, RFCOMM, OBEX, AVDTP, SBC codec)
-        │ ioctl su /dev/bluetooth/h2/0
+   libbluetooth.so  (profiles, RFCOMM, OBEX, AVDTP, SBC codec)
+        │ ioctl on /dev/bluetooth/h2/0
    bluetooth_server  (LocalDeviceImpl, SDP server, KeyStore)
         │ ioctl
-   Kernel: hci + btCoreData + l2cap + h2generic (driver USB)
+   Kernel: hci + btCoreData + l2cap + h2generic (USB driver)
 ```
 
-Quattro livelli, ~60.000 righe C++ su 252 file sorgente.
+Four layers, ~60,000 lines of C++ across 252 source files.
 
-## Compilazione
+## Building
 
-Serve un checkout sorgente Haiku. I file di DenteBlu vanno copiati nei path corrispondenti dell'albero Haiku. Il build system è Jam.
+Requires a Haiku source checkout. Copy DenteBlu files to the matching paths in the Haiku source tree. Build system is Jam.
 
 ```sh
-jam h2generic        # driver USB + Intel firmware loader
+jam h2generic        # USB driver + Intel firmware loader
 jam bluetooth_server # server
-jam libbluetooth.so  # libreria kit
-jam l2cap            # protocollo kernel L2CAP
-jam btCoreData       # modulo kernel dati core
+jam libbluetooth.so  # kit library
+jam l2cap            # L2CAP kernel protocol
+jam btCoreData       # core data kernel module
 ```
 
-## Installazione
+## Installation
 
 ```sh
-# Userspace (sostituibili a runtime)
+# Userspace (replaceable at runtime)
 cp bluetooth_server  /boot/system/non-packaged/servers/
 cp libbluetooth.so   /boot/system/non-packaged/lib/
 
-# Kernel (richiede reboot)
+# Kernel (requires reboot)
 cp h2generic   /boot/system/non-packaged/add-ons/kernel/drivers/bin/
 ln -sf ../../../bin/h2generic \
   /boot/system/non-packaged/add-ons/kernel/drivers/dev/bluetooth/h2/h2generic
@@ -50,42 +50,42 @@ cp hci         /boot/system/non-packaged/add-ons/kernel/bluetooth/
 cp l2cap       /boot/system/non-packaged/add-ons/kernel/network/protocols/
 ```
 
-h2generic **deve** stare in `drivers/bin/` con un symlink in `drivers/dev/bluetooth/h2/`. Haiku devfs carica i driver solo da `drivers/bin/`.
+h2generic **must** go in `drivers/bin/` with a symlink in `drivers/dev/bluetooth/h2/`. Haiku devfs only loads drivers from `drivers/bin/`.
 
 ## Intel firmware loader
 
-Il modulo `btintel.cpp` gestisce i chip Intel che richiedono firmware download via USB. Flusso:
+The `btintel.cpp` module handles Intel chips that require firmware download over USB:
 
-1. Read Intel Version (0xFC05) — rileva bootloader (`fw_variant=0x06`)
-2. Read Boot Params (0xFC0D), carica `.sfi` da `/boot/system/non-packaged/data/firmware/intel/`
-3. Download via Secure Send (0xFC09) su bulk endpoint
-4. Intel Reset (0xFC01) — il chip reboota USB
-5. Drain boot events, Read Version → `fw_variant=0x23` (operativo)
+1. Read Intel Version (0xFC05) — detects bootloader mode (`fw_variant=0x06`)
+2. Read Boot Params (0xFC0D), load `.sfi` from `/boot/system/non-packaged/data/firmware/intel/`
+3. Download via Secure Send (0xFC09) on bulk endpoint
+4. Intel Reset (0xFC01) — chip reboots USB
+5. Drain boot events, Read Version → `fw_variant=0x23` (operational)
 6. DDC loading (0xFC8B), Intel Event Mask (0xFC52)
 
-I file firmware si trovano nel repository [linux-firmware](https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/tree/intel) (es. `ibt-19-0-4.sfi`, `ibt-19-0-4.ddc`).
+Firmware files are available from the [linux-firmware](https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/tree/intel) repository (e.g. `ibt-19-0-4.sfi`, `ibt-19-0-4.ddc`).
 
-**Nota:** su Tiger Lake/Alder Lake c'è un bug kernel in `smp.cpp` che causa KDL durante operazioni XHCI sotto carico. La fix è in `smp-fix-ticket.md`.
+**Note:** Tiger Lake/Alder Lake machines hit a kernel bug in `smp.cpp` that causes KDL during heavy XHCI activity. See `smp-fix-ticket.md` for the analysis and patch.
 
-## Profili implementati
+## Implemented profiles
 
-| Profilo | Stato |
-|---------|-------|
-| SPP (Serial Port) | Funzionante |
-| PBAP (Phone Book) | Implementato |
-| OPP (Object Push) | Implementato |
-| A2DP (Audio) | Implementato, non testato su HW |
-| HFP (Hands-Free) | Implementato, non testato su HW |
-| AVRCP (Remote Control) | Implementato, non testato su HW |
-| SCO/eSCO (Audio sync) | Endpoint USB pronti, streaming da completare |
-| ATT/GATT (BLE) | Implementato |
+| Profile | Status |
+|---------|--------|
+| SPP (Serial Port) | Working |
+| PBAP (Phone Book) | Implemented |
+| OPP (Object Push) | Implemented |
+| A2DP (Audio) | Implemented, untested on HW |
+| HFP (Hands-Free) | Implemented, untested on HW |
+| AVRCP (Remote Control) | Implemented, untested on HW |
+| SCO/eSCO (Sync audio) | USB endpoints ready, streaming TBD |
+| ATT/GATT (BLE) | Implemented |
 
-## Problemi noti
+## Known issues
 
-- Il bug kernel `smp.cpp` su Tiger Lake causa KDL durante la riconnessione USB post-firmware Intel — vedi `smp-fix-ticket.md`
-- Android non apre connessioni RFCOMM in ingresso verso Haiku (probabilmente serve Secure Connections P-256; BCM2070 ha solo P-192)
-- Leak PSM in L2CAP se un processo viene killato con SIGKILL (workaround: reboot)
+- Kernel bug in `smp.cpp` on Tiger Lake causes KDL during USB reconnection after Intel firmware load — see `smp-fix-ticket.md`
+- Android won't open incoming RFCOMM to Haiku (likely needs Secure Connections P-256; BCM2070 only has P-192)
+- L2CAP PSM leak if a process is SIGKILLed (workaround: reboot)
 
-## Licenza
+## License
 
 MIT
