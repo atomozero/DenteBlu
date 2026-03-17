@@ -1391,20 +1391,60 @@ btintel_setup(bt_usb_dev* bdev)
 			&reset_params, sizeof(reset_params));
 
 		ERROR("btintel: legacy: Intel Reset issued, waiting "
-			"for USB disconnect\n");
+			"for chip reboot\n");
 
-		// Wait for chip to physically disconnect from USB.
-		// The chip needs ~200-500ms to start USB disconnect.
-		snooze(1000000);
+		// The chip reboots its USB interface after Intel Reset.
+		// Wait for it to come back with operational firmware.
+		// Linux btintel_boot_wait uses 1000ms; we use 3s to be safe
+		// since Haiku's USB stack may not re-enumerate as quickly.
+		snooze(3000000);
 
-		ERROR("btintel: legacy: post-reset delay done\n");
+		ERROR("btintel: legacy: post-reset delay done, "
+			"checking if chip rebooted\n");
 
-		// Return B_SHUTTING_DOWN so device_added knows the chip
-		// is rebooting and registers the device handle for clean
-		// USB disconnect/reconnect.  When the chip reconnects
-		// with operational firmware (fw_variant 0x23), the next
-		// device_added call will see B_OK from the "already
-		// operational" check and proceed normally.
+		// Drain boot events from the rebooted chip
+		btintel_drain_boot_events(bdev);
+
+		// Try Read Version again — if the chip rebooted successfully,
+		// it should now report fw_variant=0x23 (operational).
+		ver_actual = 0;
+		err = btintel_send_cmd_sync(bdev, INTEL_HCI_READ_VERSION,
+			&ver_param, 1, raw_ver, sizeof(raw_ver), &ver_actual);
+		if (err == B_OK && ver_actual == sizeof(intel_version)
+			&& raw_ver[1] == 0x37) {
+			intel_version ver2;
+			memcpy(&ver2, raw_ver, sizeof(ver2));
+			ERROR("btintel: post-reset version: fw_variant=0x%02x\n",
+				ver2.fw_variant);
+
+			if (ver2.fw_variant == 0x23) {
+				ERROR("btintel: chip operational after reset!\n");
+
+				// Load DDC
+				char ddc_name[64];
+				if (ver.hw_variant >= 0x11) {
+					snprintf(ddc_name, sizeof(ddc_name),
+						"ibt-%d-%d-%d.ddc", ver.hw_variant,
+						ver.hw_revision, ver.fw_revision);
+				} else {
+					snprintf(ddc_name, sizeof(ddc_name),
+						"ibt-%d-%d.ddc", ver.hw_variant,
+						ver.hw_revision);
+				}
+				btintel_load_ddc(bdev, ddc_name);
+				btintel_set_event_mask(bdev);
+				return B_OK;
+			}
+		} else {
+			ERROR("btintel: post-reset Read Version failed: %s "
+				"(USB handle may be stale)\n", strerror(err));
+		}
+
+		// If Read Version failed, the USB handle is dead (chip
+		// disconnected and reconnected on a new handle).  Fall back
+		// to the two-phase approach: return B_SHUTTING_DOWN and let
+		// device_added be called again for the new USB device.
+		ERROR("btintel: falling back to USB reconnect path\n");
 		return B_SHUTTING_DOWN;
 	}
 
