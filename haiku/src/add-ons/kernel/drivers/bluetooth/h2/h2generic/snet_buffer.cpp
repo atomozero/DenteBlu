@@ -31,15 +31,27 @@ struct snet_buffer {
 snet_buffer*
 snb_create(uint16 size)
 {
-	// TODO: pointer checking
-
 #ifdef SNB_BUFFER_ATTACHED
 	// Allocating these 2 buffers together might prevent memory fragmentation
 	snet_buffer* snb = (snet_buffer*) malloc(sizeof(snet_buffer) + size);
+#ifdef SNB_PERFORMS_POINTER_CHECKS
+	if (snb == NULL)
+		return NULL;
+#endif
 	snb->buffer = ((uint8*)snb) + sizeof(snet_buffer);
 #else
 	snet_buffer* snb = malloc(sizeof (snet_buffer));
+#ifdef SNB_PERFORMS_POINTER_CHECKS
+	if (snb == NULL)
+		return NULL;
+#endif
 	snb->buffer = malloc(size);
+#ifdef SNB_PERFORMS_POINTER_CHECKS
+	if (snb->buffer == NULL) {
+		free(snb);
+		return NULL;
+	}
+#endif
 #endif
 
 	snb->pullingSize = snb->puttingSize = 0;
@@ -52,19 +64,30 @@ snb_create(uint16 size)
 void
 snb_put(snet_buffer* snb, void* data, uint16 size)
 {
-	// TODO: check overflow
-	memcpy( &snb->buffer[snb->puttingSize], data, size);
-	snb->puttingSize+=size;
+#ifdef SNB_PERFORMS_OVERFLOW_CHECKS
+	if (snb->puttingSize + size > snb->expectedSize) {
+		panic("snb_put: would overflow buffer (putting %u, have %u, expected %u)",
+			size, snb->puttingSize, snb->expectedSize);
+		return;
+	}
+#endif
+	memcpy(&snb->buffer[snb->puttingSize], data, size);
+	snb->puttingSize += size;
 }
 
 
 void*
 snb_pull(snet_buffer* snb, uint16 size)
 {
-	// TODO: check overflow
-	snb->pullingSize+=size;
+#ifdef SNB_PERFORMS_OVERFLOW_CHECKS
+	if (snb->pullingSize + size > snb->expectedSize) {
+		panic("snb_pull: would overflow buffer (pulling %u, have %u, expected %u)",
+			size, snb->pullingSize, snb->expectedSize);
+		return NULL;
+	}
+#endif
+	snb->pullingSize += size;
 	return &snb->buffer[snb->pullingSize - size];
-	
 }
 
 
@@ -94,7 +117,10 @@ snb_free(snet_buffer* snb)
 void*
 snb_get(snet_buffer* snb)
 {
-	// TODO: pointer checking
+#ifdef SNB_PERFORMS_POINTER_CHECKS
+	if (snb == NULL)
+		return NULL;
+#endif
 	return snb->buffer;
 }
 
@@ -102,7 +128,10 @@ snb_get(snet_buffer* snb)
 uint16
 snb_size(snet_buffer* snb)
 {
-	// TODO: pointer checking
+#ifdef SNB_PERFORMS_POINTER_CHECKS
+	if (snb == NULL)
+		return 0;
+#endif
 	return snb->expectedSize;
 }
 
@@ -110,7 +139,10 @@ snb_size(snet_buffer* snb)
 void*
 snb_cookie(snet_buffer* snb)
 {
-	// TODO: pointer checking
+#ifdef SNB_PERFORMS_POINTER_CHECKS
+	if (snb == NULL)
+		return NULL;
+#endif
 	return snb->cookie;
 }
 
@@ -118,7 +150,10 @@ snb_cookie(snet_buffer* snb)
 void
 snb_set_cookie(snet_buffer* snb, void* cookie)
 {
-	// TODO: pointer checking
+#ifdef SNB_PERFORMS_POINTER_CHECKS
+	if (snb == NULL)
+		return;
+#endif
 	snb->cookie = cookie;
 }
 
