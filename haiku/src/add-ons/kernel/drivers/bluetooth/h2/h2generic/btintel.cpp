@@ -89,7 +89,7 @@ btintel_drain_boot_events(bt_usb_dev* bdev)
 	int events_drained = 0;
 	bool boot_complete = false;
 
-	for (int i = 0; i < 10; i++) {
+	for (int i = 0; i < 20; i++) {
 		intel_sync_ctx evt_ctx;
 		evt_ctx.done = create_sem(0, "btintel_drain");
 		if (evt_ctx.done < 0)
@@ -105,13 +105,17 @@ btintel_drain_boot_events(bt_usb_dev* bdev)
 			return err;
 		}
 
-		// Short timeout: 500ms per event, enough for boot events
+		// Wait up to 2s per event. The chip needs time to boot after
+		// Intel Reset — the first event may take over 1s to arrive.
 		err = acquire_sem_etc(evt_ctx.done, 1, B_RELATIVE_TIMEOUT,
-			500000);
+			2000000);
 		if (err != B_OK) {
-			// Timeout — no more pending events
 			delete_sem(evt_ctx.done);
 			usb->cancel_queued_transfers(bdev->intr_in_ep->handle);
+			if (boot_complete)
+				break; // Got boot complete, just no more events
+			ERROR("btintel: drain timeout (got %d events so far)\n",
+				events_drained);
 			break;
 		}
 		delete_sem(evt_ctx.done);
@@ -123,12 +127,22 @@ btintel_drain_boot_events(bt_usb_dev* bdev)
 		ERROR("btintel: drained event 0x%02x (%" B_PRIuSIZE
 			" bytes)\n", evt_buf[0], evt_ctx.actual_len);
 
+		// Log event contents for diagnostics
+		for (size_t j = 0; j < evt_ctx.actual_len && j < 12; j++)
+			ERROR("btintel:   evt[%" B_PRIuSIZE "]=0x%02x\n",
+				j, evt_buf[j]);
+
 		// Check for boot complete: vendor event 0xFF, sub-event 0x02
 		if (evt_buf[0] == 0xFF && evt_ctx.actual_len >= 3
 			&& evt_buf[2] == 0x02) {
 			boot_complete = true;
 			ERROR("btintel: boot complete event received\n");
-			// Drain one more time in case there are trailing events
+		}
+
+		// After boot complete, do one more short drain to clear
+		// any trailing events, then stop.
+		if (boot_complete && i > 0) {
+			// Quick drain with short timeout
 			continue;
 		}
 	}
