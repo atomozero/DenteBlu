@@ -105,10 +105,10 @@ btintel_drain_boot_events(bt_usb_dev* bdev)
 			return err;
 		}
 
-		// Wait up to 2s per event. The chip needs time to boot after
-		// Intel Reset — the first event may take over 1s to arrive.
+		// Wait up to 5s per event. The chip may need several seconds
+		// after Intel Reset before sending boot complete.
 		err = acquire_sem_etc(evt_ctx.done, 1, B_RELATIVE_TIMEOUT,
-			2000000);
+			5000000);
 		if (err != B_OK) {
 			delete_sem(evt_ctx.done);
 			usb->cancel_queued_transfers(bdev->intr_in_ep->handle);
@@ -1409,9 +1409,9 @@ btintel_setup(bt_usb_dev* bdev)
 
 		// The chip reboots its USB interface after Intel Reset.
 		// Wait for it to come back with operational firmware.
-		// Linux btintel_boot_wait uses 1000ms; we use 3s to be safe
-		// since Haiku's USB stack may not re-enumerate as quickly.
-		snooze(3000000);
+		// The chip needs ~1-2s to reboot, plus time for Haiku's USB
+		// stack to re-enumerate.  5s total to be safe.
+		snooze(5000000);
 
 		ERROR("btintel: legacy: post-reset delay done, "
 			"checking if chip rebooted\n");
