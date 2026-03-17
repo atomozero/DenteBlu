@@ -80,6 +80,14 @@ Firmware files are available from the [linux-firmware](https://git.kernel.org/pu
 | SCO/eSCO (Sync audio) | USB endpoints ready, streaming TBD |
 | ATT/GATT (BLE) | Implemented |
 
+## Comparison with upstream Haiku (March 2026)
+
+Haiku's built-in Bluetooth stack only covers a partially-working L2CAP (recently rewritten by waddlesplash) and an incomplete SDP userland. There are no profiles, no BLE, and no working SSP pairing on modern devices. Upstream work is currently focused on basic HCI event handling patches.
+
+DenteBlu provides all of the above plus: full HCI with Intel firmware loading, 10 SDP service records, RFCOMM, ATT/GATT, SMP (P-192 + P-256), and seven application profiles (SPP, PBAP, OPP, A2DP Source/Sink, AVRCP, HFP Client/AG), a Media Kit audio add-on, SCO audio support, BLE/NUS client, and a preferences GUI with Deskbar replicant.
+
+See `TODO.md` for features still missing toward full BT spec coverage.
+
 ## Known issues
 
 - Kernel bug in `smp.cpp` on Tiger Lake causes KDL during USB reconnection after Intel firmware load — see `smp-fix-ticket.md`

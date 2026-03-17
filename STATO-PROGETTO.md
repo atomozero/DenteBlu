@@ -58,3 +58,40 @@ haiku/src/add-ons/kernel/drivers/bluetooth/h2/h2generic/h2generic.h   — struct
 haiku/src/add-ons/kernel/drivers/bluetooth/h2/h2generic/h2cfg.h       — BLUETOOTH_SUPPORTS_SCO
 haiku/src/add-ons/kernel/drivers/bluetooth/h2/h2generic/h2transactions.cpp — submit_rx/tx_sco
 ```
+
+## Confronto con lo stack Bluetooth ufficiale di Haiku (marzo 2026)
+
+Lo stack BT ufficiale di Haiku e' in fase iniziale. I lavori recenti si concentrano
+su patch basilari (es. handling di `HCI_EVENT_INQUIRY_RESULT_WITH_RSSI`).
+
+### Stato upstream Haiku
+
+- **L2CAP**: riscritto da waddlesplash (nuovo state machine, locking, EndpointManager), ma con FIXME e timeout mancanti
+- **SDP**: non completamente implementato lato userland
+- **HCI/btCoreData**: necessitano refactoring; si valuta la fusione in un unico bus manager
+- **Profili**: nessuno implementato (no A2DP, HID, OPP, SPP, PBAP, HFP)
+- **BLE**: non implementato
+- **Pairing SSP**: non funzionante su dispositivi moderni
+
+### Confronto diretto
+
+| Componente | DenteBlu | Haiku upstream |
+|---|---|---|
+| HCI completo + Intel FW loader | Fatto | Patch incrementali |
+| L2CAP Basic + ERTM + LE CID | Fatto | Riscritto, lacune |
+| SDP (10 record, server) | Fatto | Incompleto |
+| RFCOMM | Fatto | Non presente |
+| ATT/GATT client | Fatto | Non presente |
+| SMP P-192 + P-256 | Fatto | Non presente |
+| SPP, PBAP, OPP | Fatto | Non presente |
+| A2DP Source + Sink | Fatto | Non presente |
+| AVRCP, HFP, SCO | Fatto | Non presente |
+| BLE (NUS client) | Fatto | Non presente |
+| Media Kit add-on | Fatto | Non presente |
+| GUI Preferenze + Deskbar | Fatto | Non presente |
+
+DenteBlu e' significativamente piu' avanti rispetto allo stack ufficiale.
+
+## Parti mancanti per compatibilita' 100%
+
+Vedi `TODO.md` per la lista dettagliata con priorita'.
