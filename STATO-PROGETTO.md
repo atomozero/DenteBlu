@@ -21,6 +21,16 @@ Il chip si riconnette con firmware operativo. Il driver drena i vendor events di
 **Supporto SCO/eSCO:**
 Il driver enumera gli endpoint isochronous da USB interface 1 alt 1 e gestisce il lifecycle (init/cancel/purge) in tutto il ciclo device_open/close/removed. Le funzioni submit_rx_sco/submit_tx_sco sono scheletri pronti per l'integrazione audio.
 
+## Fix recenti
+
+### Race condition use-after-free in L2capEndpoint::Free() (risolto)
+
+Alla chiusura di un socket L2CAP (es. durante `A2dpSource::Disconnect()`), `Free()` rimuoveva l'endpoint dalla channel map *prima* di leggere `fConnection`. Se un HCI disconnect concorrente distruggeva la `HciConnection`, `Disconnected()` non trovava l'endpoint nella map e non azzerava `fConnection`, lasciando un puntatore dangling. `free_command_idents_by_pointer()` tentava poi di acquisire `conn->fLock` su memoria già distrutta → spinlock panic → KDL.
+
+**Fix in due parti:**
+1. `ConnectionInterface.cpp`: `free_command_idents_by_pointer()` ora valida che la connessione sia ancora nella lista attiva sotto `sConnectionListLock` prima di accedere a `conn->fLock`
+2. `L2capEndpoint.cpp`: `Free()` ora legge e azzera `fConnection` sotto `fLock` *prima* di rimuoversi dalle mappe canale/PSM, permettendo a `Disconnected()` di azzerare `fConnection` se la race si verifica
+
 ## Cosa blocca
 
 ### Bug kernel: panic in smp.cpp durante operazioni XHCI (Tiger Lake)
@@ -57,6 +67,8 @@ haiku/src/add-ons/kernel/drivers/bluetooth/h2/h2generic/h2generic.cpp — driver
 haiku/src/add-ons/kernel/drivers/bluetooth/h2/h2generic/h2generic.h   — struct bt_usb_dev con campi SCO
 haiku/src/add-ons/kernel/drivers/bluetooth/h2/h2generic/h2cfg.h       — BLUETOOTH_SUPPORTS_SCO
 haiku/src/add-ons/kernel/drivers/bluetooth/h2/h2generic/h2transactions.cpp — submit_rx/tx_sco
+haiku/src/add-ons/kernel/bluetooth/btCoreData/ConnectionInterface.cpp — gestione connessioni HCI
+haiku/src/add-ons/kernel/network/protocols/l2cap/L2capEndpoint.cpp    — endpoint L2CAP
 ```
 
 ## Confronto con lo stack Bluetooth ufficiale di Haiku (marzo 2026)

@@ -94,6 +94,10 @@ See `TODO.md` for features still missing toward full BT spec coverage.
 - Android won't open incoming RFCOMM to Haiku (likely needs Secure Connections P-256; BCM2070 only has P-192)
 - L2CAP PSM leak if a process is SIGKILLed (workaround: reboot)
 
+## Fixed issues
+
+- **Use-after-free in L2capEndpoint::Free()** — race between socket close and HCI disconnect caused spinlock panic (KDL) when `free_command_idents_by_pointer()` accessed a destroyed `HciConnection::fLock`. Fixed by validating connection liveness in btCoreData and reordering `Free()` to read `fConnection` before unbinding from channel maps.
+
 ## License
 
 MIT

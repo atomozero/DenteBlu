@@ -289,7 +289,32 @@ free_command_ident(HciConnection* conn, uint8 ident)
 void
 free_command_idents_by_pointer(HciConnection* conn, void* pointer)
 {
-	MutexLocker _(&conn->fLock);
+	if (conn == NULL)
+		return;
+
+	// Validate that the connection is still in the active list.
+	// RemoveConnection() removes from the list under sConnectionListLock
+	// before deleting, so holding the lock guarantees conn won't be
+	// destroyed while we access it.  Without this check, a concurrent
+	// HCI disconnect can delete the connection (and mutex_destroy its
+	// fLock) while we try to lock it — causing a spinlock panic.
+	MutexLocker listLocker(&sConnectionListLock);
+
+	DoublyLinkedList<HciConnection>::Iterator listIter
+		= sConnectionList.GetIterator();
+	bool valid = false;
+	while (listIter.HasNext()) {
+		if (listIter.Next() == conn) {
+			valid = true;
+			break;
+		}
+	}
+
+	if (!valid)
+		return;
+
+	// Connection is alive and protected by sConnectionListLock.
+	MutexLocker connLocker(&conn->fLock);
 
 	// Scan all in-use idents and remove any that point to the given address.
 	// This prevents dangling pointers when an endpoint is freed while

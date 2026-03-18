@@ -322,26 +322,15 @@ L2capEndpoint::Free()
 {
 	CALLED();
 
-	// Remove from PSM and channel maps BEFORE acquiring fLock to avoid
-	// lock ordering deadlock: Free() would acquire fLock then
-	// fChannelEndpointsLock (via UnbindFromChannel), but Disconnected()
-	// acquires fChannelEndpointsLock then fLock — ABBA deadlock.
-	// After removal, no signal handler can find this endpoint, so
-	// concurrent access is not a concern.
-
-	// fDomain is set in ProtocolSocket::Open(). Sockets spawned via
-	// spawn_pending_socket (incoming connections) never have Open()
-	// called, so fDomain may be NULL. Guard against that.
-	if (Domain() != NULL && !LocalAddress().IsEmpty(true))
-		gL2capEndpointManager.Unbind(this);
-
-	// If the channel was never properly disconnected (e.g. Shutdown()
-	// timed out, or the HCI connection dropped), we may still be in
-	// the channel map. Unbind now to prevent dangling pointers after
-	// the endpoint is deleted.
-	if (fChannelID != L2CAP_NULL_CID)
-		gL2capEndpointManager.UnbindFromChannel(this);
-
+	// Grab fConnection BEFORE removing from channel/PSM maps.
+	// If we unbind first, a concurrent ~HciConnection() calling
+	// Disconnected() won't find us in the channel map, so it can't
+	// clear fConnection — leaving a dangling pointer that causes a
+	// spinlock panic when free_command_idents_by_pointer tries to
+	// lock the already-destroyed conn->fLock.
+	// By reading fConnection first while we're still in the map,
+	// Disconnected() can still race in and set fConnection = NULL
+	// before we read it — safely preventing the dangling access.
 	HciConnection* conn = NULL;
 	{
 		MutexLocker _(fLock);
@@ -359,10 +348,20 @@ L2capEndpoint::Free()
 		fState = CLOSED;
 	}
 
+	// Now remove from PSM and channel maps. fLock is released, so
+	// no lock ordering issue with fChannelEndpointsLock.
+	if (Domain() != NULL && !LocalAddress().IsEmpty(true))
+		gL2capEndpointManager.Unbind(this);
+
+	if (fChannelID != L2CAP_NULL_CID)
+		gL2capEndpointManager.UnbindFromChannel(this);
+
 	// Safety net: purge any command idents that still reference this
 	// endpoint. This prevents use-after-free if a response arrives
 	// after the endpoint is destroyed.
-	// Called without fLock to avoid deadlock with conn->fLock.
+	// free_command_idents_by_pointer validates that conn is still in
+	// the active connection list under sConnectionListLock before
+	// accessing conn->fLock — safe against concurrent deletion.
 	if (conn != NULL)
 		btCoreData->free_command_idents_by_pointer(conn, this);
 
