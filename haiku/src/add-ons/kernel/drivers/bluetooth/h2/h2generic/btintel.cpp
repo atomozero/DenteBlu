@@ -1408,22 +1408,38 @@ btintel_setup(bt_usb_dev* bdev)
 			"for chip reboot\n");
 
 		// The chip reboots its USB interface after Intel Reset.
-		// Wait for it to come back with operational firmware.
-		// The chip needs ~1-2s to reboot, plus time for Haiku's USB
-		// stack to re-enumerate.  5s total to be safe.
-		snooze(5000000);
+		// Wait for it to come back.  The chip needs ~1-2s to reboot.
+		// We keep the USB handle — on Haiku the handle stays valid
+		// because we registered the device in device_added.
+		snooze(2000000);
 
 		ERROR("btintel: legacy: post-reset delay done, "
 			"checking if chip rebooted\n");
 
-		// Drain boot events from the rebooted chip
+		// Drain boot events from the rebooted chip.
+		// The chip sends a startup event (0xFF sub 0x06) spontaneously,
+		// but the boot complete (0xFF sub 0x02) only arrives after the
+		// first HCI command is sent.  So we drain what we can, then
+		// send Read Version — which will trigger boot complete — and
+		// retry Read Version after the boot complete is consumed.
 		btintel_drain_boot_events(bdev);
 
-		// Try Read Version again — if the chip rebooted successfully,
-		// it should now report fw_variant=0x23 (operational).
-		ver_actual = 0;
-		err = btintel_send_cmd_sync(bdev, INTEL_HCI_READ_VERSION,
-			&ver_param, 1, raw_ver, sizeof(raw_ver), &ver_actual);
+		// Try Read Version — may fail because boot complete event
+		// arrives first.  The retry loop in btintel_send_cmd_sync
+		// will skip it, but then timeout waiting for the CC.
+		// If that happens, just retry Read Version immediately.
+		for (int attempt = 0; attempt < 3; attempt++) {
+			ver_actual = 0;
+			err = btintel_send_cmd_sync(bdev,
+				INTEL_HCI_READ_VERSION, &ver_param, 1,
+				raw_ver, sizeof(raw_ver), &ver_actual);
+			if (err == B_OK)
+				break;
+			ERROR("btintel: Read Version attempt %d failed: %s"
+				" — retrying\n", attempt + 1, strerror(err));
+			snooze(500000);
+		}
+
 		if (err == B_OK && ver_actual == sizeof(intel_version)
 			&& raw_ver[1] == 0x37) {
 			intel_version ver2;
@@ -1434,7 +1450,6 @@ btintel_setup(bt_usb_dev* bdev)
 			if (ver2.fw_variant == 0x23) {
 				ERROR("btintel: chip operational after reset!\n");
 
-				// Load DDC
 				char ddc_name[64];
 				if (ver.hw_variant >= 0x11) {
 					snprintf(ddc_name, sizeof(ddc_name),
