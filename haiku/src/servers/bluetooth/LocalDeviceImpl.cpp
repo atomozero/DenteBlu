@@ -1128,6 +1128,17 @@ LocalDeviceImpl::InquiryResult(uint8* numberOfResponses, BMessage* request)
 {
 	uint8 count = *numberOfResponses;
 	TRACE_BT("LocalDeviceImpl: %s #responses=%d\n", __FUNCTION__, count);
+
+	// Always dump discovered addresses for diagnostics
+	if (count > 0) {
+		bdaddr_t* addrs = (bdaddr_t*)(numberOfResponses + 1);
+		for (uint8 i = 0; i < count; i++) {
+			fprintf(stderr, "InquiryResult: device %02x:%02x:%02x:%02x:%02x:%02x\n",
+				addrs[i].b[5], addrs[i].b[4], addrs[i].b[3],
+				addrs[i].b[2], addrs[i].b[1], addrs[i].b[0]);
+		}
+	}
+
 	if (count == 0 || request == NULL)
 		return;
 
