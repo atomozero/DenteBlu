@@ -11,6 +11,7 @@
 #include <KernelExport.h>
 #include <NetBufferUtilities.h>
 
+#include <bluetooth/bdaddrUtils.h>
 #include <btDebug.h>
 #include "L2capEndpointManager.h"
 #include "l2cap_address.h"

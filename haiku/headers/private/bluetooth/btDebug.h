@@ -7,6 +7,10 @@
 #define _BTDEBUG_H
 
 
+#undef TRACE
+#undef CALLED
+#undef ERROR
+
 #ifdef DEBUG
 #   define TRACE(x...) dprintf("bt: " x)
 #else
