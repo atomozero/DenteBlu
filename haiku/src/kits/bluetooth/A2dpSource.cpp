@@ -58,7 +58,14 @@ A2dpSource::A2dpSource()
 	fRtpTimestamp(0),
 	fSsrc(0x12345678),
 	fStreamStartTime(0),
-	fTotalSamplesSent(0)
+	fTotalSamplesSent(0),
+	fNegSampleRate(44100),
+	fNegChannels(2),
+	fNegBlocks(16),
+	fNegSubbands(8),
+	fNegChannelMode(3),
+	fNegAllocMethod(0),
+	fNegBitpool(53)
 {
 	memset(&fRemoteAddr, 0, sizeof(fRemoteAddr));
 	memset(fRtpBuf, 0, sizeof(fRtpBuf));
@@ -111,41 +118,58 @@ A2dpSource::Connect(const bdaddr_t& address)
 		return err;
 	}
 
-	/* Find an Audio Sink endpoint that's not in use */
+	/* Find an Audio Sink endpoint with SBC support.
+	 * Some headphones have multiple endpoints (e.g. AAC on SEID 1,
+	 * SBC on SEID 2), so we try each one until we find SBC. */
 	fRemoteSeid = 0;
+	AvdtpCapability caps[AVDTP_MAX_CAPABILITIES];
+	uint8 capCount = 0;
+
 	for (uint8 i = 0; i < sepCount; i++) {
-		if (AVDTP_SEP_MEDIA_TYPE(&seps[i]) == AVDTP_MEDIA_TYPE_AUDIO
-				&& AVDTP_SEP_TSEP(&seps[i]) == AVDTP_SEP_SINK
-				&& !AVDTP_SEP_IN_USE(&seps[i])) {
-			fRemoteSeid = AVDTP_SEP_SEID(&seps[i]);
-			TRACE_A2DP("Found audio sink: SEID=%u\n", fRemoteSeid);
+		if (AVDTP_SEP_MEDIA_TYPE(&seps[i]) != AVDTP_MEDIA_TYPE_AUDIO
+				|| AVDTP_SEP_TSEP(&seps[i]) != AVDTP_SEP_SINK
+				|| AVDTP_SEP_IN_USE(&seps[i]))
+			continue;
+
+		uint8 seid = AVDTP_SEP_SEID(&seps[i]);
+		TRACE_A2DP("Trying audio sink SEID=%u...\n", seid);
+
+		/* Get capabilities for this endpoint */
+		capCount = 0;
+		err = fAvdtp->GetCapabilities(seid, caps, &capCount,
+			AVDTP_MAX_CAPABILITIES);
+		if (err != B_OK) {
+			TRACE_A2DP("  GetCapabilities failed for SEID=%u\n", seid);
+			continue;
+		}
+
+		/* Dump codec capability data for debugging */
+		for (uint8 j = 0; j < capCount; j++) {
+			if (caps[j].category == AVDTP_MEDIA_CODEC) {
+				TRACE_A2DP("  SEID=%u codec cap: len=%u data=",
+					seid, caps[j].dataLen);
+				for (uint8 k = 0; k < caps[j].dataLen && k < 16; k++)
+					fprintf(stderr, "%02x ", caps[j].data[k]);
+				fprintf(stderr, "\n");
+			}
+		}
+
+		/* Try to negotiate SBC on this endpoint */
+		fRemoteSeid = seid;
+		err = _NegotiateCodec(caps, capCount);
+		if (err == B_OK) {
+			TRACE_A2DP("SBC negotiated on SEID=%u\n", seid);
 			break;
 		}
+
+		TRACE_A2DP("  SEID=%u: no SBC, trying next...\n", seid);
+		fRemoteSeid = 0;
 	}
 
 	if (fRemoteSeid == 0) {
-		TRACE_A2DP("No available audio sink endpoint found\n");
+		TRACE_A2DP("No audio sink endpoint with SBC support found\n");
 		Disconnect();
 		return B_ENTRY_NOT_FOUND;
-	}
-
-	/* Step 4: Get capabilities of the sink endpoint */
-	AvdtpCapability caps[AVDTP_MAX_CAPABILITIES];
-	uint8 capCount = 0;
-	err = fAvdtp->GetCapabilities(fRemoteSeid, caps, &capCount,
-		AVDTP_MAX_CAPABILITIES);
-	if (err != B_OK) {
-		TRACE_A2DP("GetCapabilities failed\n");
-		Disconnect();
-		return err;
-	}
-
-	/* Step 5: Negotiate codec configuration */
-	err = _NegotiateCodec();
-	if (err != B_OK) {
-		TRACE_A2DP("Codec negotiation failed\n");
-		Disconnect();
-		return err;
 	}
 
 	/* Step 6: Open stream */
@@ -164,10 +188,14 @@ A2dpSource::Connect(const bdaddr_t& address)
 		return err;
 	}
 
-	/* Create encoder: 44.1kHz, Joint Stereo, 16 blocks, 8 subbands,
-	 * Loudness, bitpool 53 */
+	/* Create encoder with negotiated SBC parameters */
 	fEncoder = new SbcEncoder();
-	err = fEncoder->Configure(44100, 2, 16, 8, 3, 0, 53);
+	TRACE_A2DP("Configuring SBC encoder: %uHz %uch blocks=%u sub=%u "
+		"chMode=%u alloc=%u bitpool=%u\n",
+		fNegSampleRate, fNegChannels, fNegBlocks, fNegSubbands,
+		fNegChannelMode, fNegAllocMethod, fNegBitpool);
+	err = fEncoder->Configure(fNegSampleRate, fNegChannels, fNegBlocks,
+		fNegSubbands, fNegChannelMode, fNegAllocMethod, fNegBitpool);
 	if (err != B_OK) {
 		TRACE_A2DP("Encoder configure failed\n");
 		Disconnect();
@@ -529,30 +557,183 @@ A2dpSource::_EnsureAclConnection(const bdaddr_t& remote)
  * ========================================================================= */
 
 status_t
-A2dpSource::_NegotiateCodec()
+A2dpSource::_NegotiateCodec(const AvdtpCapability* remoteCaps,
+	uint8 remoteCapCount)
 {
-	/* Configure SBC with standard parameters:
-	 * 44.1kHz, Joint Stereo, 16 blocks, 8 subbands,
-	 * Loudness allocation, bitpool 2-53 */
+	/* Find SBC codec capability in remote capabilities */
+	const AvdtpCapability* codecCap = NULL;
+	for (uint8 i = 0; i < remoteCapCount; i++) {
+		if (remoteCaps[i].category == AVDTP_MEDIA_CODEC
+				&& remoteCaps[i].dataLen >= 6
+				&& (remoteCaps[i].data[0] >> 4) == AVDTP_MEDIA_TYPE_AUDIO
+				&& remoteCaps[i].data[1] == AVDTP_CODEC_SBC) {
+			codecCap = &remoteCaps[i];
+			break;
+		}
+	}
 
-	AvdtpCapability caps[2];
+	if (codecCap == NULL) {
+		TRACE_A2DP("No SBC codec capability found in remote\n");
+		return B_NOT_SUPPORTED;
+	}
+
+	/* Parse SBC capability bitmasks from remote */
+	uint8 remoteFreqs = codecCap->data[2] & 0xF0;
+	uint8 remoteModes = codecCap->data[2] & 0x0F;
+	uint8 remoteBlocks = codecCap->data[3] & 0xF0;
+	uint8 remoteSubbands = codecCap->data[3] & 0x0C;
+	uint8 remoteAlloc = codecCap->data[3] & 0x03;
+	uint8 remoteMinBitpool = codecCap->data[4];
+	uint8 remoteMaxBitpool = codecCap->data[5];
+
+	TRACE_A2DP("Remote SBC caps: freq=0x%02x mode=0x%02x "
+		"blocks=0x%02x sub=0x%02x alloc=0x%02x bitpool=%u-%u\n",
+		remoteFreqs, remoteModes, remoteBlocks, remoteSubbands,
+		remoteAlloc, remoteMinBitpool, remoteMaxBitpool);
+
+	/* Select frequency (prefer 44100 > 48000 > 32000 > 16000) */
+	uint8 selFreq;
+	if (remoteFreqs & SBC_FREQ_44100)
+		selFreq = SBC_FREQ_44100;
+	else if (remoteFreqs & SBC_FREQ_48000)
+		selFreq = SBC_FREQ_48000;
+	else if (remoteFreqs & SBC_FREQ_32000)
+		selFreq = SBC_FREQ_32000;
+	else if (remoteFreqs & SBC_FREQ_16000)
+		selFreq = SBC_FREQ_16000;
+	else {
+		TRACE_A2DP("No compatible sampling frequency\n");
+		return B_NOT_SUPPORTED;
+	}
+
+	/* Select channel mode (prefer Joint Stereo > Stereo > Dual > Mono) */
+	uint8 selMode;
+	if (remoteModes & SBC_CHANNEL_JOINT_STEREO)
+		selMode = SBC_CHANNEL_JOINT_STEREO;
+	else if (remoteModes & SBC_CHANNEL_STEREO)
+		selMode = SBC_CHANNEL_STEREO;
+	else if (remoteModes & SBC_CHANNEL_DUAL)
+		selMode = SBC_CHANNEL_DUAL;
+	else if (remoteModes & SBC_CHANNEL_MONO)
+		selMode = SBC_CHANNEL_MONO;
+	else {
+		TRACE_A2DP("No compatible channel mode\n");
+		return B_NOT_SUPPORTED;
+	}
+
+	/* Select block length (prefer 16 > 12 > 8 > 4) */
+	uint8 selBlocks;
+	if (remoteBlocks & SBC_BLOCK_16)
+		selBlocks = SBC_BLOCK_16;
+	else if (remoteBlocks & SBC_BLOCK_12)
+		selBlocks = SBC_BLOCK_12;
+	else if (remoteBlocks & SBC_BLOCK_8)
+		selBlocks = SBC_BLOCK_8;
+	else if (remoteBlocks & SBC_BLOCK_4)
+		selBlocks = SBC_BLOCK_4;
+	else {
+		TRACE_A2DP("No compatible block length\n");
+		return B_NOT_SUPPORTED;
+	}
+
+	/* Select subbands (prefer 8 > 4) */
+	uint8 selSubbands;
+	if (remoteSubbands & SBC_SUBBANDS_8)
+		selSubbands = SBC_SUBBANDS_8;
+	else if (remoteSubbands & SBC_SUBBANDS_4)
+		selSubbands = SBC_SUBBANDS_4;
+	else {
+		TRACE_A2DP("No compatible subbands\n");
+		return B_NOT_SUPPORTED;
+	}
+
+	/* Select allocation method (prefer Loudness > SNR) */
+	uint8 selAlloc;
+	if (remoteAlloc & SBC_ALLOC_LOUDNESS)
+		selAlloc = SBC_ALLOC_LOUDNESS;
+	else if (remoteAlloc & SBC_ALLOC_SNR)
+		selAlloc = SBC_ALLOC_SNR;
+	else {
+		TRACE_A2DP("No compatible allocation method\n");
+		return B_NOT_SUPPORTED;
+	}
+
+	/* Clamp bitpool to remote's supported range */
+	uint8 selMinBitpool = remoteMinBitpool;
+	uint8 selMaxBitpool = remoteMaxBitpool;
+	if (selMinBitpool < 2)
+		selMinBitpool = 2;
+	if (selMaxBitpool > 53)
+		selMaxBitpool = 53;
+	if (selMaxBitpool < selMinBitpool)
+		selMaxBitpool = selMinBitpool;
+
+	TRACE_A2DP("Selected SBC config: freq=0x%02x mode=0x%02x "
+		"blocks=0x%02x sub=0x%02x alloc=0x%02x bitpool=%u-%u\n",
+		selFreq, selMode, selBlocks, selSubbands, selAlloc,
+		selMinBitpool, selMaxBitpool);
+
+	/* Build SetConfiguration with negotiated parameters */
+	AvdtpCapability cfgCaps[2];
 
 	/* Media Transport */
-	caps[0].category = AVDTP_MEDIA_TRANSPORT;
-	caps[0].dataLen = 0;
+	cfgCaps[0].category = AVDTP_MEDIA_TRANSPORT;
+	cfgCaps[0].dataLen = 0;
 
-	/* Media Codec: SBC */
-	caps[1].category = AVDTP_MEDIA_CODEC;
-	caps[1].dataLen = 6;
-	caps[1].data[0] = AVDTP_MEDIA_TYPE_AUDIO << 4;
-	caps[1].data[1] = AVDTP_CODEC_SBC;
-	/* SBC codec info element */
-	caps[1].data[2] = SBC_FREQ_44100 | SBC_CHANNEL_JOINT_STEREO;
-	caps[1].data[3] = SBC_BLOCK_16 | SBC_SUBBANDS_8 | SBC_ALLOC_LOUDNESS;
-	caps[1].data[4] = 2;   /* min bitpool */
-	caps[1].data[5] = 53;  /* max bitpool */
+	/* Media Codec: SBC with selected configuration */
+	cfgCaps[1].category = AVDTP_MEDIA_CODEC;
+	cfgCaps[1].dataLen = 6;
+	cfgCaps[1].data[0] = AVDTP_MEDIA_TYPE_AUDIO << 4;
+	cfgCaps[1].data[1] = AVDTP_CODEC_SBC;
+	cfgCaps[1].data[2] = selFreq | selMode;
+	cfgCaps[1].data[3] = selBlocks | selSubbands | selAlloc;
+	cfgCaps[1].data[4] = selMinBitpool;
+	cfgCaps[1].data[5] = selMaxBitpool;
 
-	return fAvdtp->SetConfiguration(fRemoteSeid, fLocalSeid, caps, 2);
+	status_t err = fAvdtp->SetConfiguration(fRemoteSeid, fLocalSeid,
+		cfgCaps, 2);
+	if (err != B_OK)
+		return err;
+
+	/* Map selected SBC capability bits to encoder parameter values */
+	switch (selFreq) {
+		case SBC_FREQ_16000: fNegSampleRate = 16000; break;
+		case SBC_FREQ_32000: fNegSampleRate = 32000; break;
+		case SBC_FREQ_44100: fNegSampleRate = 44100; break;
+		case SBC_FREQ_48000: fNegSampleRate = 48000; break;
+	}
+
+	switch (selMode) {
+		case SBC_CHANNEL_MONO:
+			fNegChannels = 1; fNegChannelMode = 0; break;
+		case SBC_CHANNEL_DUAL:
+			fNegChannels = 2; fNegChannelMode = 1; break;
+		case SBC_CHANNEL_STEREO:
+			fNegChannels = 2; fNegChannelMode = 2; break;
+		case SBC_CHANNEL_JOINT_STEREO:
+			fNegChannels = 2; fNegChannelMode = 3; break;
+	}
+
+	switch (selBlocks) {
+		case SBC_BLOCK_4:  fNegBlocks = 4;  break;
+		case SBC_BLOCK_8:  fNegBlocks = 8;  break;
+		case SBC_BLOCK_12: fNegBlocks = 12; break;
+		case SBC_BLOCK_16: fNegBlocks = 16; break;
+	}
+
+	switch (selSubbands) {
+		case SBC_SUBBANDS_4: fNegSubbands = 4; break;
+		case SBC_SUBBANDS_8: fNegSubbands = 8; break;
+	}
+
+	switch (selAlloc) {
+		case SBC_ALLOC_LOUDNESS: fNegAllocMethod = 0; break;
+		case SBC_ALLOC_SNR:      fNegAllocMethod = 1; break;
+	}
+
+	fNegBitpool = selMaxBitpool;
+
+	return B_OK;
 }
 
 

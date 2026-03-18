@@ -18,6 +18,7 @@
 
 class AvdtpSession;
 class SbcEncoder;
+struct AvdtpCapability;
 
 
 namespace Bluetooth {
@@ -59,7 +60,9 @@ public:
 private:
 	static bool					_EnsureAclConnection(
 								    const bdaddr_t& remote);
-	status_t					_NegotiateCodec();
+	status_t					_NegotiateCodec(
+								    const AvdtpCapability* remoteCaps,
+								    uint8 remoteCapCount);
 	status_t					_BuildRtpPacket(const uint8* sbcFrames,
 								    uint8 frameCount,
 								    uint16 totalSbcLen);
@@ -80,6 +83,15 @@ private:
 	/* Pacing state */
 	bigtime_t					fStreamStartTime;
 	uint64						fTotalSamplesSent;
+
+	/* Negotiated SBC parameters (set by _NegotiateCodec) */
+	uint32						fNegSampleRate;
+	uint8						fNegChannels;
+	uint8						fNegBlocks;
+	uint8						fNegSubbands;
+	uint8						fNegChannelMode;
+	uint8						fNegAllocMethod;
+	uint8						fNegBitpool;
 
 	/* RTP send buffer */
 	uint8						fRtpBuf[4096];
