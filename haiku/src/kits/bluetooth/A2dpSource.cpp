@@ -505,6 +505,13 @@ A2dpSource::_EnsureAclConnection(const bdaddr_t& remote)
 		authReq.AddInt16("opcodeExpected",
 			PACK_OPCODE(OGF_LINK_CONTROL, OCF_AUTH_REQUESTED));
 		authReq.AddInt16("eventExpected", HCI_EVENT_LINK_KEY_REQ);
+		authReq.AddInt16("eventExpected", HCI_EVENT_IO_CAPABILITY_REQUEST);
+		authReq.AddInt16("eventExpected", HCI_EVENT_IO_CAPABILITY_RESPONSE);
+		authReq.AddInt16("eventExpected",
+			HCI_EVENT_USER_CONFIRMATION_REQUEST);
+		authReq.AddInt16("eventExpected",
+			HCI_EVENT_SIMPLE_PAIRING_COMPLETE);
+		authReq.AddInt16("eventExpected", HCI_EVENT_LINK_KEY_NOTIFY);
 		authReq.AddInt16("eventExpected", HCI_EVENT_AUTH_COMPLETE);
 
 		result = messenger.SendMessage(&authReq, &authReply,
