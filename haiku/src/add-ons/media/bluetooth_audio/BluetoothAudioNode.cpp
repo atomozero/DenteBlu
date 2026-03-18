@@ -79,7 +79,12 @@ BluetoothAudioNode::NodeRegistered()
 
 	_InitParameterWeb();
 
-	Run();
+	/* Run() starts the BMediaEventLooper control thread.
+	 * On some Haiku revisions (hrev59506+), the media_addon_server
+	 * starts the control loop before calling NodeRegistered(),
+	 * so Run() must only be called if the looper is not yet running. */
+	if (RunState() == B_UNREGISTERED)
+		Run();
 }
 
 
