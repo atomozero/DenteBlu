@@ -73,27 +73,35 @@ HciConnection::~HciConnection()
 HciConnection*
 AddConnection(uint16 handle, int type, const bdaddr_t& dst, hci_id hid)
 {
+	MutexLocker locker(&sConnectionListLock);
+
 	// Check for existing connection with this handle.
-	HciConnection* conn = ConnectionByHandle(handle, hid);
-	if (conn != NULL) {
-		// Update existing connection in place; do NOT re-add to the
-		// list — adding the same DoublyLinkedList node twice corrupts
-		// the list structure and causes use-after-free crashes.
-		bdaddrUtils::Copy(conn->destination, dst);
-		{
-		sockaddr_l2cap* destination = (sockaddr_l2cap*)&conn->address_dest;
-		destination->l2cap_len = sizeof(sockaddr_l2cap);
-		destination->l2cap_family = AF_BLUETOOTH;
-		destination->l2cap_bdaddr = dst;
+	// Search under lock to prevent concurrent RemoveConnection from
+	// deleting the connection between find and use.
+	DoublyLinkedList<HciConnection>::Iterator iterator
+		= sConnectionList.GetIterator();
+	while (iterator.HasNext()) {
+		HciConnection* conn = iterator.Next();
+		if (conn->Hid == hid && conn->handle == handle) {
+			// Update existing connection in place; do NOT re-add to the
+			// list — adding the same DoublyLinkedList node twice corrupts
+			// the list structure and causes use-after-free crashes.
+			bdaddrUtils::Copy(conn->destination, dst);
+			{
+			sockaddr_l2cap* destination = (sockaddr_l2cap*)&conn->address_dest;
+			destination->l2cap_len = sizeof(sockaddr_l2cap);
+			destination->l2cap_family = AF_BLUETOOTH;
+			destination->l2cap_bdaddr = dst;
+			}
+			conn->type = type;
+			conn->status = HCI_CONN_OPEN;
+			conn->mtu = L2CAP_MTU_MINIMUM;
+			return conn;
 		}
-		conn->type = type;
-		conn->status = HCI_CONN_OPEN;
-		conn->mtu = L2CAP_MTU_MINIMUM;
-		return conn;
 	}
 
 	// Create new connection descriptor.
-	conn = new (std::nothrow) HciConnection(hid);
+	HciConnection* conn = new (std::nothrow) HciConnection(hid);
 	if (conn == NULL)
 		return NULL;
 
@@ -111,10 +119,7 @@ AddConnection(uint16 handle, int type, const bdaddr_t& dst, hci_id hid)
 	conn->status = HCI_CONN_OPEN;
 	conn->mtu = L2CAP_MTU_MINIMUM;
 
-	{
-	MutexLocker _(&sConnectionListLock);
 	sConnectionList.Add(conn);
-	}
 
 	return conn;
 }
@@ -141,7 +146,8 @@ RemoveConnection(const bdaddr_t& destination, hci_id hid)
 				|| conn == sConnectionList.Head()) {
 				sConnectionList.Remove(conn);
 
-				locker.Unlock();
+				// Delete under lock so that no concurrent
+				// ConnectionByHandle() can see freed memory.
 				delete conn;
 				return B_OK;
 			}
@@ -170,7 +176,8 @@ RemoveConnection(uint16 handle, hci_id hid)
 				|| conn == sConnectionList.Head()) {
 				sConnectionList.Remove(conn);
 
-				locker.Unlock();
+				// Delete under lock so that no concurrent
+				// ConnectionByHandle() can see freed memory.
 				delete conn;
 				return B_OK;
 			}
