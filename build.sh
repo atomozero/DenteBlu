@@ -89,7 +89,7 @@ build_lib() {
 
     echo "  → linking libbluetooth.so"
     if g++ -shared -o "$BUILD/libbluetooth.so" "${OBJS[@]}" \
-       -lbe -lnetwork -llocalestub 2>&1; then
+       -lbe -lnetwork -llocalestub -lsbc 2>&1; then
         pass "libbluetooth.so linked"
     else
         fail "libbluetooth.so link"

@@ -343,7 +343,23 @@ A2dpSource::SendAudio(const int16* pcm, size_t sampleCount)
 
 			/* Send the RTP packet */
 			size_t rtpLen = RTP_HEADER_SIZE + 1 + sbcBufLen;
+
+			/* Dump first packets for debugging */
+			if (fRtpSeqNumber < 5) {
+				bigtime_t now = system_time();
+				fprintf(stderr, "A2DP-SRC: pkt#%u len=%zu t=%" B_PRId64
+					"us SBC:%02x%02x%02x%02x\n",
+					fRtpSeqNumber, rtpLen,
+					now - fStreamStartTime,
+					sbcBuf[0], sbcBuf[1], sbcBuf[2], sbcBuf[3]);
+			}
+
 			ssize_t sent = send(mediaSocket, fRtpBuf, rtpLen, 0);
+
+			if (fRtpSeqNumber < 5) {
+				fprintf(stderr, "A2DP-SRC: send returned %zd (errno=%s)\n",
+					sent, sent < 0 ? strerror(errno) : "ok");
+			}
 			if (sent < 0) {
 				TRACE_A2DP("send error: %s\n", strerror(errno));
 				return B_ERROR;
