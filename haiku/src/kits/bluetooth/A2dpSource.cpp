@@ -777,8 +777,9 @@ A2dpSource::_BuildRtpPacket(const uint8* sbcFrames, uint8 frameCount,
 	fRtpBuf[10] = (uint8)(fSsrc >> 8);
 	fRtpBuf[11] = (uint8)(fSsrc & 0xFF);
 
-	/* A2DP SBC media payload header (1 byte) */
-	fRtpBuf[12] = (frameCount & 0x0F) << 4;
+	/* A2DP SBC media payload header (1 byte)
+	 * Bits 7-4: reserved (0), Bits 3-0: number of SBC frames */
+	fRtpBuf[12] = frameCount & 0x0F;
 
 	/* SBC frame data */
 	memcpy(fRtpBuf + 13, sbcFrames, totalSbcLen);

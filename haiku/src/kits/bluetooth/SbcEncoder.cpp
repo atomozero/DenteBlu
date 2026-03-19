@@ -82,24 +82,8 @@ _InitAnalysisTables()
 }
 
 
-/* CRC-8 for SBC (polynomial x^8 + x^4 + x^3 + x^2 + 1 = 0x1D) */
-static uint8
-_Crc8(const uint8* data, size_t len)
-{
-	uint8 crc = 0x0F;
-
-	for (size_t i = 0; i < len; i++) {
-		uint8 byte = data[i];
-		for (int bit = 7; bit >= 0; bit--) {
-			uint8 msb = (crc >> 7) & 1;
-			crc = (crc << 1) | ((byte >> bit) & 1);
-			if (msb)
-				crc ^= 0x1D;
-		}
-	}
-
-	return crc;
-}
+/* CRC-8 polynomial x^8 + x^4 + x^3 + x^2 + 1 = 0x1D
+ * (Bit-level CRC is computed inline in EncodeFrame) */
 
 
 /* Bit writer for packing quantized samples */
@@ -244,8 +228,55 @@ SbcEncoder::EncodeFrame(const int16* input, uint8* output,
 	_BuildHeader(output);
 	_QuantizeAndPack(output, bits);
 
-	/* Step 6: CRC (covers bytes 1-2 of header) */
-	output[3] = _Crc8(output + 1, 2);
+	/* Step 6: CRC — per SBC spec, covers byte1, byte2, and then
+	 * the joint flags (if joint stereo) and all scale factors.
+	 * These are already packed in the output by _QuantizeAndPack.
+	 * CRC data starts at output[1] and covers:
+	 *   2 bytes (byte1 + byte2)
+	 *   + joint flags: subbands bits (if joint stereo, rounded up)
+	 *   + scale factors: 4 * subbands * channels bits
+	 * Total bits to CRC (not counting byte1 and byte2 which are full bytes):
+	 *   joint_bits + sf_bits, packed starting at output[4] */
+	{
+		uint16 crcBits = 16; /* byte1 (8 bits) + byte2 (8 bits) */
+		if (fChannelMode == SBC_CM_JOINT_STEREO)
+			crcBits += fSubbands; /* join flags */
+		crcBits += 4 * fSubbands * fChannels; /* scale factors */
+
+		/* CRC-8 over individual bits, starting from byte1 */
+		uint8 crc = 0x0F;
+		const uint8* p = output + 1;
+		uint16 bitsRemaining = crcBits;
+		size_t byteIdx = 0;
+		int bitPos = 7; /* MSB first */
+
+		while (bitsRemaining > 0) {
+			uint8 msb = (crc >> 7) & 1;
+			uint8 dataBit = (p[byteIdx] >> bitPos) & 1;
+			crc = (crc << 1) | dataBit;
+			if (msb != 0)
+				crc ^= 0x1D;
+			bitPos--;
+			if (bitPos < 0) {
+				bitPos = 7;
+				byteIdx++;
+				/* Skip byte 3 (CRC slot) in the data stream */
+				if (byteIdx == 2)
+					byteIdx = 3;
+			}
+			bitsRemaining--;
+		}
+
+		/* Final 8 shifts to flush */
+		for (int i = 0; i < 8; i++) {
+			uint8 msb = (crc >> 7) & 1;
+			crc <<= 1;
+			if (msb != 0)
+				crc ^= 0x1D;
+		}
+
+		output[3] = crc;
+	}
 
 	return frameLen;
 }

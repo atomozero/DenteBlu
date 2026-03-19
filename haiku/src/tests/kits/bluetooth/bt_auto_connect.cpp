@@ -117,7 +117,7 @@ ConnectA2DP(const bdaddr_t& address)
 				chunk = toneSamples - sent;
 			GenerateTone(pcm, chunk, channels, sampleRate,
 				freqs[t], sent, toneSamples);
-			err = source.SendAudio(pcm, chunk * channels);
+			err = source.SendAudio(pcm, chunk);
 			if (err != B_OK) break;
 			sent += chunk;
 		}
