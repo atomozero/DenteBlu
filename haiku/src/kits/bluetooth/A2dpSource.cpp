@@ -514,16 +514,23 @@ A2dpSource::_EnsureAclConnection(const bdaddr_t& remote)
 		authReq.AddInt16("eventExpected", HCI_EVENT_LINK_KEY_NOTIFY);
 		authReq.AddInt16("eventExpected", HCI_EVENT_AUTH_COMPLETE);
 
+		TRACE_A2DP("Sending Authentication Requested...\n");
 		result = messenger.SendMessage(&authReq, &authReply,
-			B_INFINITE_TIMEOUT, 10000000LL);
+			B_INFINITE_TIMEOUT, 30000000LL);
 		int8 authStatus = BT_ERROR;
-		if (result == B_OK)
+		if (result == B_TIMED_OUT) {
+			TRACE_A2DP("Authentication timed out (SSP may need more time)\n");
+		} else if (result == B_OK) {
 			authReply.FindInt8("status", &authStatus);
+		}
+		TRACE_A2DP("Auth result: transport=%s hci_status=0x%02X\n",
+			strerror(result), (unsigned)(uint8)authStatus);
 		if (authStatus != BT_OK) {
 			TRACE_A2DP("Authentication failed (0x%02X)\n",
 				(unsigned)(uint8)authStatus);
 			return false;
 		}
+		TRACE_A2DP("Authentication succeeded, link key should be saved\n");
 	}
 
 	/* Encrypt */
