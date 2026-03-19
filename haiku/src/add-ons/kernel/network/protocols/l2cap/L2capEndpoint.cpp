@@ -11,7 +11,6 @@
 #include <KernelExport.h>
 #include <NetBufferUtilities.h>
 
-#include <bluetooth/bdaddrUtils.h>
 #include <btDebug.h>
 #include "L2capEndpointManager.h"
 #include "l2cap_address.h"
@@ -479,8 +478,10 @@ L2capEndpoint::Connect(const struct sockaddr* _address)
 	if (hid <= 0)
 		return ENETUNREACH;
 
-	TRACE("l2cap: %" B_PRId32 " for route %s\n", hid,
-		bdaddrUtils::ToString(address->l2cap_bdaddr).String());
+	TRACE("l2cap: %" B_PRId32 " for route %02x:%02x:%02x:%02x:%02x:%02x\n",
+		hid, address->l2cap_bdaddr.b[5], address->l2cap_bdaddr.b[4],
+		address->l2cap_bdaddr.b[3], address->l2cap_bdaddr.b[2],
+		address->l2cap_bdaddr.b[1], address->l2cap_bdaddr.b[0]);
 
 	fConnection = btCoreData->ConnectionByDestination(
 		address->l2cap_bdaddr, hid);
