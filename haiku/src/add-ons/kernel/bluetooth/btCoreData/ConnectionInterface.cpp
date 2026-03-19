@@ -146,8 +146,12 @@ RemoveConnection(const bdaddr_t& destination, hci_id hid)
 				|| conn == sConnectionList.Head()) {
 				sConnectionList.Remove(conn);
 
-				// Delete under lock so that no concurrent
-				// ConnectionByHandle() can see freed memory.
+				// Release lock BEFORE delete: ~HciConnection() calls
+				// l2cap_error_received() → ConnectionByDestination()
+				// which needs sConnectionListLock. Deleting under lock
+				// would deadlock. Safe because conn is already removed
+				// from the list, so no concurrent lookup will find it.
+				locker.Unlock();
 				delete conn;
 				return B_OK;
 			}
@@ -176,8 +180,8 @@ RemoveConnection(uint16 handle, hci_id hid)
 				|| conn == sConnectionList.Head()) {
 				sConnectionList.Remove(conn);
 
-				// Delete under lock so that no concurrent
-				// ConnectionByHandle() can see freed memory.
+				// Release lock BEFORE delete (see above).
+				locker.Unlock();
 				delete conn;
 				return B_OK;
 			}

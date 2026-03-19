@@ -209,9 +209,10 @@ build_kernel() {
 
     local KFLAGS="-std=c++17 -Wall -Werror -fPIC -O2 \
         -Wno-address-of-packed-member -Wno-class-memaccess \
-        -fno-exceptions -fno-rtti -D_KERNEL_MODE=1"
+        -fno-exceptions -fno-rtti -D_KERNEL_MODE=1 -DKDEBUG=1"
     local KINC=(
         -include "$BUILD/kernel_fwd.h"
+        -include /boot/system/develop/headers/private/kernel/debug.h
         -I"$BUILD"
         -I"$HDR/os"
         -I"$HDR/os/bluetooth"
@@ -270,8 +271,10 @@ KEOF
     done
 
     echo "  → linking btCoreData"
-    if g++ -shared -nostdlib -o "$BUILD/btCoreData" \
-       "${BTC_OBJS[@]}" "$BUILD/obj/dso_handle.o" -lgcc 2>&1; then
+    if g++ -shared -nostdlib        -Xlinker -soname -Xlinker btCoreData \
+       -o "$BUILD/btCoreData" \
+       "${BTC_OBJS[@]}" "$BUILD/obj/dso_handle.o" \
+       /boot/system/develop/lib/_KERNEL_ -lgcc 2>&1; then
         pass "btCoreData linked"
     else
         fail "btCoreData link"
@@ -293,8 +296,10 @@ KEOF
     done
 
     echo "  → linking l2cap"
-    if g++ -shared -nostdlib -o "$BUILD/l2cap" \
-       "${L2_OBJS[@]}" "$BUILD/obj/dso_handle.o" -lgcc 2>&1; then
+    if g++ -shared -nostdlib        -Xlinker -soname -Xlinker l2cap \
+       -o "$BUILD/l2cap" \
+       "${L2_OBJS[@]}" "$BUILD/obj/dso_handle.o" \
+       /boot/system/develop/lib/_KERNEL_ -lgcc 2>&1; then
         pass "l2cap linked"
     else
         fail "l2cap link"
