@@ -138,8 +138,14 @@ RemoteDevice::Authenticate()
 	CALLED();
 	int8 btStatus = BT_ERROR;
 
-	if (fMessenger == NULL || fDiscovererLocalDevice == NULL)
+	fprintf(stderr, "RemoteDevice::Authenticate: messenger=%p localDev=%p\n",
+		fMessenger, fDiscovererLocalDevice);
+
+	if (fMessenger == NULL || fDiscovererLocalDevice == NULL) {
+		fprintf(stderr, "RemoteDevice::Authenticate: ABORT — %s is NULL\n",
+			fMessenger == NULL ? "fMessenger" : "fDiscovererLocalDevice");
 		return false;
+	}
 
 	BluetoothCommand<typed_command(hci_cp_create_conn)>
 		createConnection(OGF_LINK_CONTROL, OCF_CREATE_CONN);

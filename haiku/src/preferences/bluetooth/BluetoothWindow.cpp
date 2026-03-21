@@ -444,9 +444,16 @@ BluetoothWindow::MessageReceived(BMessage* message)
 			}
 
 			// Start inquiry (paired devices remain in sidebar)
+			fScanning = true;
 			fDiscoveryAgent = ActiveLocalDevice->GetDiscoveryAgent();
-			fDiscoveryAgent->StartInquiry(BT_GIAC, fDiscoveryListener,
-				GetInquiryTime());
+			if (fDiscoveryAgent->StartInquiry(BT_GIAC, fDiscoveryListener,
+					GetInquiryTime()) != B_OK) {
+				fScanning = false;
+				/* Retry in 3 seconds */
+				BMessenger messenger(this);
+				BMessageRunner::StartSending(messenger,
+					new BMessage(kMsgAddDevices), 3000000, 1);
+			}
 			break;
 		}
 
@@ -462,8 +469,20 @@ BluetoothWindow::MessageReceived(BMessage* message)
 				break;
 			RemoteDevice* remote
 				= dynamic_cast<RemoteDevice*>(devItem->Device());
-			if (remote != NULL)
-				remote->Authenticate();
+			if (remote == NULL)
+				break;
+
+			/* Stop ongoing inquiry before pairing — the server
+			 * can't process Create Connection while inquiry
+			 * is running on the same HCI controller. */
+			if (fDiscoveryAgent != NULL) {
+				fDiscoveryAgent->CancelInquiry(fDiscoveryListener);
+				fScanning = false;
+			}
+			fScanProgress->SetTo(100);
+			fScanProgress->SetTrailingText("Pairing...");
+
+			remote->Authenticate();
 			break;
 		}
 
