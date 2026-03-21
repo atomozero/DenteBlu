@@ -208,8 +208,28 @@ RemoteDevice::Authenticate()
 	if (btStatus == BT_OK) {
 		reply.FindInt16("handle", (int16*)&fHandle);
 		return true;
-	} else
-		return false;
+	}
+
+	/* 0x0B = ACL Connection Already Exists — connection is already up
+	 * from the inquiry phase.  Retrieve the handle and send
+	 * Authentication Requested directly. */
+	if ((uint8)btStatus == 0x0B) {
+		/* Ask server for the existing handle */
+		BMessage getConn(BT_MSG_GET_PROPERTY);
+		BMessage getReply;
+		getConn.AddInt32("hci_id", fDiscovererLocalDevice->ID());
+		getConn.AddString("property", "handle");
+		getConn.AddData("bdaddr", B_ANY_TYPE, &fBdaddr, sizeof(bdaddr_t));
+
+		if (fMessenger->SendMessage(&getConn, &getReply,
+				B_INFINITE_TIMEOUT, 5000000LL) == B_OK)
+			getReply.FindInt16("handle", (int16*)&fHandle);
+
+		if (fHandle > 0)
+			return true;
+	}
+
+	return false;
 }
 
 

@@ -433,8 +433,15 @@ BluetoothWindow::MessageReceived(BMessage* message)
 
 		case kMsgAddDevices:
 		{
-			if (ActiveLocalDevice == NULL || fScanning || fRetrieving)
+			if (fScanning || fRetrieving)
 				break;
+			if (ActiveLocalDevice == NULL) {
+				/* Device not ready yet — retry in 1 second */
+				BMessenger messenger(this);
+				BMessageRunner::StartSending(messenger,
+					new BMessage(kMsgAddDevices), 1000000, 1);
+				break;
+			}
 
 			// Start inquiry (paired devices remain in sidebar)
 			fDiscoveryAgent = ActiveLocalDevice->GetDiscoveryAgent();
