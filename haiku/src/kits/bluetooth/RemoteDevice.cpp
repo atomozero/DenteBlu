@@ -187,17 +187,22 @@ RemoteDevice::Authenticate()
 
 	// [a] this is expected of authentication required
 	request.AddInt16("eventExpected", HCI_EVENT_LINK_KEY_REQ);
-	// [b] If we deny the key an authentication will be requested
-	// but this request will be handled by sepatated by the pincode
-	// window
-	// request.AddInt16("eventExpected", HCI_EVENT_PIN_CODE_REQ);
+
+	// SSP (Simple Secure Pairing) events for modern devices
+	request.AddInt16("eventExpected", HCI_EVENT_IO_CAPABILITY_REQUEST);
+	request.AddInt16("eventExpected", HCI_EVENT_IO_CAPABILITY_RESPONSE);
+	request.AddInt16("eventExpected",
+		HCI_EVENT_USER_CONFIRMATION_REQUEST);
+	request.AddInt16("eventExpected",
+		HCI_EVENT_SIMPLE_PAIRING_COMPLETE);
 
 	// this almost involves already the happy end
 	request.AddInt16("eventExpected",  HCI_EVENT_LINK_KEY_NOTIFY);
 
 	request.AddInt16("eventExpected", HCI_EVENT_CONN_COMPLETE);
 
-	if (fMessenger->SendMessage(&request, &reply) == B_OK)
+	if (fMessenger->SendMessage(&request, &reply,
+			B_INFINITE_TIMEOUT, 30000000LL) == B_OK)
 		reply.FindInt8("status", &btStatus);
 
 	if (btStatus == BT_OK) {
