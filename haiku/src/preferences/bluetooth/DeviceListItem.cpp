@@ -12,7 +12,7 @@
 
 #include "DeviceListItem.h"
 
-#define TEXT_ROWS  3
+#define TEXT_ROWS  2
 
 namespace Bluetooth {
 
@@ -72,26 +72,21 @@ DeviceListItem::DrawItem(BView* owner, BRect itemRect, bool complete)
 	float lineHeight = finfo.ascent + finfo.descent + finfo.leading;
 	float textLeft = itemRect.left + DeviceClass::PixelsForIcon + 2 * inset;
 
-	// Vertically center 3 lines of text
+	// Vertically center 2 lines of text
 	float lineGap = inset / 2;
-	float totalTextHeight = 3 * lineHeight + 2 * lineGap;
+	float totalTextHeight = 2 * lineHeight + lineGap;
 	float textTop = itemRect.top
 		+ (itemRect.Height() - totalTextHeight) / 2;
 
-	// Line 1 (top): name
-	BPoint point(textLeft, textTop + finfo.ascent);
-	owner->SetFont(be_plain_font);
 	rgb_color baseColor = IsSelected() ? selectedText : textColor;
+
+	// Line 1 (top): name in bold
+	BPoint point(textLeft, textTop + finfo.ascent);
+	owner->SetFont(be_bold_font);
 	owner->MovePenTo(point);
 	owner->DrawString(fName.String());
 
-	// Line 2 (middle): address
-	point.y += lineHeight + lineGap;
-	owner->SetFont(be_fixed_font);
-	owner->MovePenTo(point);
-	owner->DrawString(bdaddrUtils::ToString(fAddress));
-
-	// Line 3 (bottom): device class
+	// Line 2 (bottom): device class in lighter color
 	point.y += lineHeight + lineGap;
 	owner->SetFont(be_plain_font);
 	BString classLine;
@@ -121,7 +116,7 @@ DeviceListItem::Update(BView* owner, const BFont* font)
 	float inset = be_control_look->DefaultLabelSpacing();
 	float lineGap = inset / 2;
 	SetHeight(MAX((height.ascent + height.descent + height.leading) * TEXT_ROWS
-		+ (TEXT_ROWS - 1) * lineGap + 2 * inset,
+		+ lineGap + 2 * inset,
 		DeviceClass::PixelsForIcon + 2 * DeviceClass::IconInsets + inset));
 }
 
