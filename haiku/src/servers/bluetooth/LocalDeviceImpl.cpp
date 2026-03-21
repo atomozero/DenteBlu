@@ -1374,10 +1374,6 @@ LocalDeviceImpl::ConnectionComplete(struct hci_ev_conn_complete* event,
 {
 
 	if (event->status == BT_OK) {
-		ConnectionIncoming* iConnection = new ConnectionIncoming(
-			event->bdaddr);
-		iConnection->Show();
-
 		TRACE_BT("LocalDeviceImpl: %s: Address %s handle=%#x type=%d encrypt=%d\n", __FUNCTION__,
 				bdaddrUtils::ToString(event->bdaddr).String(), event->handle,
 				event->link_type, event->encrypt_mode);
