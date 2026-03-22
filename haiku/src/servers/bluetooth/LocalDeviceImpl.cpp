@@ -1378,14 +1378,32 @@ LocalDeviceImpl::ConnectionComplete(struct hci_ev_conn_complete* event,
 				bdaddrUtils::ToString(event->bdaddr).String(), event->handle,
 				event->link_type, event->encrypt_mode);
 
-		// Don't initiate auth from our side — let the phone's
-		// security manager handle auth/encrypt when it needs to
-		// (e.g. before opening RFCOMM). We still respond to
-		// Link_Key_Request with our stored key.
-		if (event->link_type == 0x01 && event->encrypt_mode == 0) {
-			TRACE_BT("LocalDeviceImpl: ACL connected unencrypted, "
-				"waiting for remote to initiate security "
-				"(handle=%#x)\n", event->handle);
+		// If we initiated the connection (request != NULL) and the
+		// ACL link came up without encryption, kick off SSP by
+		// sending Authentication_Requested.  The controller will
+		// then emit IO_Capability_Request → User_Confirmation →
+		// Simple_Pairing_Complete → Auth_Complete, all of which
+		// are already handled by our event dispatchers.
+		if (event->link_type == 0x01 && event->encrypt_mode == 0
+			&& request != NULL) {
+			TRACE_BT("LocalDeviceImpl: ACL unencrypted, sending "
+				"Authentication_Requested (handle=%#x)\n",
+				event->handle);
+
+			size_t size;
+			void* cmd = buildAuthenticationRequested(
+				event->handle, &size);
+			if (cmd != NULL) {
+				BMessage* authRequest = new BMessage;
+				authRequest->AddInt16("eventExpected",
+					HCI_EVENT_CMD_STATUS);
+				authRequest->AddInt16("opcodeExpected",
+					PACK_OPCODE(OGF_LINK_CONTROL,
+						OCF_AUTH_REQUESTED));
+				AddWantedEvent(authRequest);
+				fHCIDelegate->IssueCommand(cmd, size);
+				free(cmd);
+			}
 		}
 
 	} else {
