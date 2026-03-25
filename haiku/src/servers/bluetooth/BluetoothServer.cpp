@@ -488,8 +488,31 @@ BluetoothServer::HandleGetProperty(BMessage* message, BMessage* reply)
 
 		TRACE_BT("BluetoothServer: Searching %s property...\n", propertyRequested);
 
+		// Connection handle lookup by bdaddr (dynamic, not stored)
+		if (strcmp(propertyRequested, "handle") == 0) {
+			const void* addrData;
+			ssize_t addrSize;
+			if (message->FindData("bdaddr", B_ANY_TYPE,
+					&addrData, &addrSize) == B_OK
+				&& addrSize == sizeof(bdaddr_t)) {
+				bdaddr_t bdaddr;
+				memcpy(&bdaddr, addrData, sizeof(bdaddr_t));
+				uint16 handle =
+					lDeviceImpl->FindHandleByAddress(bdaddr);
+				if (handle > 0) {
+					reply->AddInt16("handle", handle);
+					TRACE_BT("BluetoothServer: handle=%#x "
+						"for %s\n", handle,
+						bdaddrUtils::ToString(bdaddr).String());
+				} else {
+					TRACE_BT("BluetoothServer: no active "
+						"connection for %s\n",
+						bdaddrUtils::ToString(bdaddr).String());
+				}
+			}
+
 		// Check if the property has been already retrieved
-		if (lDeviceImpl->IsPropertyAvailable(propertyRequested)) {
+		} else if (lDeviceImpl->IsPropertyAvailable(propertyRequested)) {
 
 			// 1 bytes requests
 			if (strcmp(propertyRequested, "hci_version") == 0
@@ -521,8 +544,6 @@ BluetoothServer::HandleGetProperty(BMessage* message, BMessage* reply)
 					FindBool(propertyRequested);
 
 				reply->AddInt32("result", result);
-
-
 
 			} else {
 				TRACE_BT("BluetoothServer: Property %s could not be satisfied\n", propertyRequested);
