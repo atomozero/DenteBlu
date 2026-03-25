@@ -158,8 +158,16 @@ DeskbarReplicant::MessageReceived(BMessage* msg)
 {
 	switch (msg->what) {
 		case kMsgOpenBluetoothPreferences:
-			be_roster->Launch(BLUETOOTH_APP_SIGNATURE);
+		{
+			entry_ref ref;
+			if (get_ref_for_path(
+					"/boot/system/non-packaged/preferences/Bluetooth",
+					&ref) == B_OK)
+				be_roster->Launch(&ref);
+			else
+				be_roster->Launch(BLUETOOTH_APP_SIGNATURE);
 			break;
+		}
 
 		case kMsgSendFile:
 		{
