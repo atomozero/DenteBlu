@@ -16,6 +16,7 @@
 #include <Window.h>
 #include <Message.h>
 
+#include <bluetooth/DeviceClass.h>
 #include <bluetooth/LocalDevice.h>
 
 class BluetoothSettingsView;
@@ -43,6 +44,7 @@ private:
 	void			_ShowPairedDeviceDetail(PairedDeviceItem* item);
 	void			_ClearDetail();
 	void			_ClearDevices();
+	void			_UpdateButtonsForClass(DeviceClass devClass);
 
 	// Sidebar
 	BOutlineListView*		fListView;

@@ -38,6 +38,10 @@
 #include <bluetooth/LocalDevice.h>
 #include <bluetooth/RemoteDevice.h>
 #include <bluetooth/bdaddrUtils.h>
+#include <bluetooth/HCI/btHCI_command.h>
+#include <bluetooth/HCI/btHCI_event.h>
+#include <bluetoothserver_p.h>
+#include <CommandManager.h>
 
 #include "defs.h"
 
@@ -123,6 +127,7 @@ public:
 
 	const BString& Address() const { return fAddress; }
 	const BString& Name() const { return fName; }
+	DeviceClass GetDeviceClass() const { return fClass; }
 
 	void DrawItem(BView* owner, BRect itemRect, bool complete)
 	{
@@ -153,15 +158,15 @@ public:
 			+ 2 * inset;
 		rgb_color baseColor = IsSelected() ? selectedText : textColor;
 
-		// Vertically center 3 lines of text
+		// Vertically center 2 lines of text
 		float lineGap = inset / 2;
-		float totalTextHeight = 3 * lineHeight + 2 * lineGap;
+		float totalTextHeight = 2 * lineHeight + lineGap;
 		float textTop = itemRect.top
 			+ (itemRect.Height() - totalTextHeight) / 2;
 
-		// Line 1 (top): name
+		// Line 1 (top): name in bold
 		BPoint point(textLeft, textTop + finfo.ascent);
-		owner->SetFont(be_plain_font);
+		owner->SetFont(be_bold_font);
 		owner->MovePenTo(point);
 		if (fName.Length() > 0)
 			owner->DrawString(fName.String());
@@ -171,20 +176,14 @@ public:
 			owner->SetHighColor(baseColor);
 		}
 
-		// Line 2 (middle): address
+		// Line 2 (bottom): device class
 		point.y += lineHeight + lineGap;
-		owner->SetFont(be_fixed_font);
-		owner->MovePenTo(point);
-		owner->DrawString(fAddress.String());
-
-		// Line 3 (bottom): device class
-		point.y += lineHeight + lineGap;
+		owner->SetFont(be_plain_font);
 		if (!fClass.IsUnknownDeviceClass()) {
 			BString classLine;
 			fClass.GetMajorDeviceClass(classLine);
 			classLine << " / ";
 			fClass.GetMinorDeviceClass(classLine);
-			owner->SetFont(be_plain_font);
 			owner->SetHighColor(tint_color(baseColor, 0.7));
 			owner->MovePenTo(point);
 			owner->DrawString(classLine.String());
@@ -207,8 +206,8 @@ public:
 		float inset = be_control_look->DefaultLabelSpacing();
 		float lineGap = inset / 2;
 		SetHeight(MAX(
-			(height.ascent + height.descent + height.leading) * 3
-				+ 2 * lineGap + 2 * inset,
+			(height.ascent + height.descent + height.leading) * 2
+				+ lineGap + 2 * inset,
 			DeviceClass::PixelsForIcon + 2 * DeviceClass::IconInsets
 				+ inset));
 	}
@@ -491,15 +490,166 @@ BluetoothWindow::MessageReceived(BMessage* message)
 			int32 index = fListView->CurrentSelection();
 			if (index < 0)
 				break;
+
+			// Try scanned device first
 			Bluetooth::DeviceListItem* devItem
 				= dynamic_cast<Bluetooth::DeviceListItem*>(
 					fListView->ItemAt(index));
-			if (devItem == NULL)
+			if (devItem != NULL) {
+				RemoteDevice* remote
+					= dynamic_cast<RemoteDevice*>(devItem->Device());
+				if (remote != NULL)
+					remote->Disconnect();
 				break;
-			RemoteDevice* remote
-				= dynamic_cast<RemoteDevice*>(devItem->Device());
-			if (remote != NULL)
-				remote->Disconnect();
+			}
+
+			// Paired device — resolve handle from server and disconnect
+			PairedDeviceItem* paired
+				= dynamic_cast<PairedDeviceItem*>(
+					fListView->ItemAt(index));
+			if (paired != NULL && ActiveLocalDevice != NULL) {
+				bdaddr_t addr = bdaddrUtils::FromString(
+					paired->Address().String());
+				BMessenger messenger(BLUETOOTH_SIGNATURE);
+				if (!messenger.IsValid())
+					break;
+
+				// Get handle for this address
+				BMessage getConn(BT_MSG_GET_PROPERTY);
+				BMessage getReply;
+				getConn.AddInt32("hci_id",
+					ActiveLocalDevice->ID());
+				getConn.AddString("property", "handle");
+				getConn.AddData("bdaddr", B_ANY_TYPE,
+					&addr, sizeof(bdaddr_t));
+
+				int16 handle = 0;
+				if (messenger.SendMessage(&getConn, &getReply,
+						B_INFINITE_TIMEOUT, 5000000LL) != B_OK
+					|| getReply.FindInt16("handle", &handle) != B_OK
+					|| handle <= 0) {
+					fScanProgress->SetTrailingText(
+						B_TRANSLATE("Not connected"));
+					break;
+				}
+
+				// Send HCI Disconnect
+				BluetoothCommand<typed_command(
+					struct hci_disconnect)>
+					disconnect(OGF_LINK_CONTROL,
+						OCF_DISCONNECT);
+				disconnect->handle = handle;
+				disconnect->reason = 0x13; // Remote User Terminated
+
+				BMessage req(BT_MSG_HANDLE_SIMPLE_REQUEST);
+				BMessage reply;
+				req.AddInt32("hci_id",
+					ActiveLocalDevice->ID());
+				req.AddData("raw command", B_ANY_TYPE,
+					disconnect.Data(), disconnect.Size());
+				req.AddInt16("eventExpected",
+					HCI_EVENT_CMD_STATUS);
+				req.AddInt16("opcodeExpected",
+					PACK_OPCODE(OGF_LINK_CONTROL,
+						OCF_DISCONNECT));
+				req.AddInt16("eventExpected",
+					HCI_EVENT_DISCONNECTION_COMPLETE);
+				if (messenger.SendMessage(&req, &reply,
+						B_INFINITE_TIMEOUT, 10000000LL) == B_OK) {
+					fScanProgress->SetTrailingText(
+						B_TRANSLATE("Disconnected"));
+					fDisconnectButton->SetLabel(
+						B_TRANSLATE("Connect"));
+					fDisconnectButton->SetMessage(
+						new BMessage(kMsgConnectDevice));
+				} else
+					fScanProgress->SetTrailingText(
+						B_TRANSLATE("Disconnect failed"));
+			}
+			break;
+		}
+
+		case kMsgConnectDevice:
+		{
+			int32 index = fListView->CurrentSelection();
+			if (index < 0)
+				break;
+			PairedDeviceItem* paired
+				= dynamic_cast<PairedDeviceItem*>(
+					fListView->ItemAt(index));
+			if (paired == NULL || ActiveLocalDevice == NULL)
+				break;
+
+			fScanProgress->SetTrailingText(
+				B_TRANSLATE("Connecting..."));
+
+			bdaddr_t addr = bdaddrUtils::FromString(
+				paired->Address().String());
+			BMessenger messenger(BLUETOOTH_SIGNATURE);
+			if (!messenger.IsValid())
+				break;
+
+			// Cancel inquiry first
+			{
+				size_t cancelSize;
+				void* cancelCmd = buildInquiryCancel(&cancelSize);
+				if (cancelCmd != NULL) {
+					BMessage cancelReq(BT_MSG_HANDLE_SIMPLE_REQUEST);
+					BMessage cancelReply;
+					cancelReq.AddInt32("hci_id",
+						ActiveLocalDevice->ID());
+					cancelReq.AddData("raw command", B_ANY_TYPE,
+						cancelCmd, cancelSize);
+					cancelReq.AddInt16("eventExpected",
+						HCI_EVENT_CMD_COMPLETE);
+					cancelReq.AddInt16("opcodeExpected",
+						PACK_OPCODE(OGF_LINK_CONTROL,
+							OCF_INQUIRY_CANCEL));
+					messenger.SendMessage(&cancelReq, &cancelReply,
+						B_INFINITE_TIMEOUT, 3000000LL);
+					free(cancelCmd);
+				}
+			}
+
+			// Create Connection
+			BluetoothCommand<typed_command(hci_cp_create_conn)>
+				createConn(OGF_LINK_CONTROL, OCF_CREATE_CONN);
+			bdaddrUtils::Copy(createConn->bdaddr, addr);
+			createConn->pkt_type = 0xCC18;
+			createConn->pscan_rep_mode = 0x01;
+			createConn->pscan_mode = 0x00;
+			createConn->clock_offset = 0x0000;
+			createConn->role_switch = 0x01;
+
+			BMessage request(BT_MSG_HANDLE_SIMPLE_REQUEST);
+			BMessage reply;
+			request.AddInt32("hci_id", ActiveLocalDevice->ID());
+			request.AddData("raw command", B_ANY_TYPE,
+				createConn.Data(), createConn.Size());
+			request.AddInt16("eventExpected", HCI_EVENT_CMD_STATUS);
+			request.AddInt16("opcodeExpected",
+				PACK_OPCODE(OGF_LINK_CONTROL, OCF_CREATE_CONN));
+			request.AddInt16("eventExpected",
+				HCI_EVENT_CONN_COMPLETE);
+
+			status_t result = messenger.SendMessage(&request, &reply,
+				B_INFINITE_TIMEOUT, 30000000LL);
+
+			int8 btStatus = BT_ERROR;
+			if (result == B_OK)
+				reply.FindInt8("status", &btStatus);
+
+			if (btStatus == BT_OK) {
+				fScanProgress->SetTrailingText(
+					B_TRANSLATE("Connected"));
+				fDisconnectButton->SetLabel(
+					B_TRANSLATE("Disconnect"));
+				fDisconnectButton->SetMessage(
+					new BMessage(kMsgDisconnectDevice));
+			} else {
+				fScanProgress->SetTrailingText(
+					B_TRANSLATE("Connection failed"));
+			}
 			break;
 		}
 
@@ -970,8 +1120,10 @@ void
 BluetoothWindow::_ShowDeviceDetail(Bluetooth::DeviceListItem* item)
 {
 	_ClearDetail();
-	if (item->Device() != NULL)
+	if (item->Device() != NULL) {
 		fDeviceInfoView->SetBluetoothDevice(item->Device());
+		_UpdateButtonsForClass(item->Device()->GetDeviceClass());
+	}
 	fDetailView->AddChild(fDeviceDetailView);
 }
 
@@ -989,7 +1141,64 @@ BluetoothWindow::_ShowPairedDeviceDetail(PairedDeviceItem* item)
 		item->Address().String(),
 		B_TRANSLATE("Paired device"));
 
+	_UpdateButtonsForClass(item->GetDeviceClass());
+
+	// Check if this paired device is currently connected
+	bool connected = false;
+	if (ActiveLocalDevice != NULL) {
+		bdaddr_t addr = bdaddrUtils::FromString(
+			item->Address().String());
+		BMessenger messenger(BLUETOOTH_SIGNATURE);
+		if (messenger.IsValid()) {
+			BMessage getConn(BT_MSG_GET_PROPERTY);
+			BMessage getReply;
+			getConn.AddInt32("hci_id", ActiveLocalDevice->ID());
+			getConn.AddString("property", "handle");
+			getConn.AddData("bdaddr", B_ANY_TYPE,
+				&addr, sizeof(bdaddr_t));
+			int16 handle = 0;
+			if (messenger.SendMessage(&getConn, &getReply,
+					B_INFINITE_TIMEOUT, 5000000LL) == B_OK
+				&& getReply.FindInt16("handle", &handle) == B_OK
+				&& handle > 0)
+				connected = true;
+		}
+	}
+
+	if (connected) {
+		fDisconnectButton->SetLabel(B_TRANSLATE("Disconnect"));
+		fDisconnectButton->SetMessage(
+			new BMessage(kMsgDisconnectDevice));
+	} else {
+		fDisconnectButton->SetLabel(B_TRANSLATE("Connect"));
+		fDisconnectButton->SetMessage(
+			new BMessage(kMsgConnectDevice));
+	}
+
 	fDetailView->AddChild(fDeviceDetailView);
+}
+
+
+void
+BluetoothWindow::_UpdateButtonsForClass(DeviceClass devClass)
+{
+	uint8 major = devClass.MajorDeviceClass();
+	// Major classes: 0=Misc, 1=Computer, 2=Phone, 3=LAN,
+	//   4=Audio/Video, 5=Peripheral, 6=Imaging
+	bool isPhone = (major == 2);
+	bool isComputer = (major == 1);
+	bool isAudio = (major == 4);
+
+	// Terminal (SPP): Phone, Computer
+	fTerminalButton->SetEnabled(isPhone || isComputer);
+	// Send File (OPP): Phone, Computer
+	fFileTransferButton->SetEnabled(isPhone || isComputer);
+	// Contacts (PBAP): Phone only
+	fPbapButton->SetEnabled(isPhone);
+	// Call (HFP): Phone only
+	fCallButton->SetEnabled(isPhone);
+	// Music (A2DP): Audio/Video, Phone, Computer
+	fA2dpButton->SetEnabled(isAudio || isPhone || isComputer);
 }
 
 

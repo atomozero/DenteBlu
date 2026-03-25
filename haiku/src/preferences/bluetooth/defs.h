@@ -41,6 +41,7 @@ static const uint32 kMsgAddDevices = 'ddDv';
 static const uint32 kMsgRemoveDevice = 'rmDv';
 static const uint32 kMsgPairDevice = 'trDv';
 static const uint32 kMsgDisconnectDevice = 'dsDv';
+static const uint32 kMsgConnectDevice = 'cnDv';
 static const uint32 kMsgQueryServices = 'qsDv';
 static const uint32 kMsgTerminal = 'term';
 static const uint32 kMsgFileTransfer = 'fTrn';
