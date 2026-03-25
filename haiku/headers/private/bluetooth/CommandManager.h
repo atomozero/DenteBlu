@@ -117,6 +117,9 @@ void* buildWriteStoredLinkKey(bdaddr_t bdaddr, const uint8 key[16],
 void* buildDeleteStoredLinkKey(bool deleteAll, size_t* outsize);
 
 /* LINK CONTROL */
+void* buildReadRemoteFeatures(uint16 handle, size_t* outsize);
+void* buildReadRemoteExtendedFeatures(uint16 handle, uint8 pageNumber,
+	size_t* outsize);
 void* buildAuthenticationRequested(uint16 handle, size_t* outsize);
 void* buildSetConnectionEncryption(uint16 handle, uint8 enable,
 	size_t* outsize);

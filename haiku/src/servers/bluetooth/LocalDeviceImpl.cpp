@@ -76,6 +76,7 @@ LocalDeviceImpl::LocalDeviceImpl(HCIDelegate* hd)
 	fLeConnectionHandle(0)
 {
 	memset(&fLeConnectionAddress, 0, sizeof(fLeConnectionAddress));
+	memset(fConnections, 0, sizeof(fConnections));
 }
 
 
@@ -435,7 +436,69 @@ LocalDeviceImpl::HandleExpectedRequest(struct hci_event_header* event,
 			break;
 
 		case HCI_EVENT_RMT_FEATURES:
+		{
+			struct hci_ev_rmt_features* featEvent =
+				JumpEventHeader<struct hci_ev_rmt_features>(event);
+			TRACE_BT("LocalDeviceImpl: RemoteFeaturesComplete: "
+				"handle=%#x status=%d\n",
+				featEvent->handle, featEvent->status);
+
+			// Retrieve pairing chain context
+			const void* addrData;
+			ssize_t addrSize;
+			int16 connHandle = 0;
+			bool hasPairingContext =
+				request->FindData("bdaddr", B_ANY_TYPE,
+					&addrData, &addrSize) == B_OK
+				&& request->FindInt16("connHandle",
+					&connHandle) == B_OK;
+
+			if (featEvent->status == BT_OK && hasPairingContext) {
+				bdaddr_t bdaddr;
+				memcpy(&bdaddr, addrData, sizeof(bdaddr_t));
+
+				bool hasSSP =
+					(featEvent->features[6] & LMP_SIMPLE_PAIR) != 0;
+				bool hasExtFeat =
+					(featEvent->features[7] & LMP_EXT_FEAT) != 0;
+				TRACE_BT("LocalDeviceImpl: Remote SSP=%d "
+					"ExtFeat=%d\n", hasSSP, hasExtFeat);
+
+				if (hasExtFeat) {
+					// Next: Read Extended Features page 1
+					size_t size;
+					void* cmd = buildReadRemoteExtendedFeatures(
+						connHandle, 1, &size);
+					if (cmd != NULL) {
+						BMessage* extReq = new BMessage;
+						extReq->AddInt16("eventExpected",
+							HCI_EVENT_CMD_STATUS);
+						extReq->AddInt16("opcodeExpected",
+							PACK_OPCODE(OGF_LINK_CONTROL,
+								OCF_READ_REMOTE_EXT_FEATURES));
+						extReq->AddInt16("eventExpected",
+							HCI_EVENT_REMOTE_EXTENDED_FEATURES);
+						extReq->AddData("bdaddr", B_ANY_TYPE,
+							&bdaddr, sizeof(bdaddr_t));
+						extReq->AddInt16("connHandle", connHandle);
+						AddWantedEvent(extReq);
+						fHCIDelegate->IssueCommand(cmd, size);
+						free(cmd);
+					}
+				} else {
+					// No extended features, skip to name + auth
+					IssueRemoteNameThenAuth(bdaddr, connHandle);
+				}
+			} else if (hasPairingContext) {
+				// Features read failed, skip to auth directly
+				bdaddr_t bdaddr;
+				memcpy(&bdaddr, addrData, sizeof(bdaddr_t));
+				IssueRemoteNameThenAuth(bdaddr, connHandle);
+			}
+
+			ClearWantedEvent(request);
 			break;
+		}
 
 		case HCI_EVENT_RMT_VERSION:
 			break;
@@ -506,7 +569,40 @@ LocalDeviceImpl::HandleExpectedRequest(struct hci_event_header* event,
 			break;
 
 		case HCI_EVENT_REMOTE_EXTENDED_FEATURES:
+		{
+			struct hci_ev_remote_extended_features* extEvent =
+				JumpEventHeader
+					<struct hci_ev_remote_extended_features>(event);
+			TRACE_BT("LocalDeviceImpl: RemoteExtFeaturesComplete: "
+				"handle=%#x page=%d maxPage=%d status=%d\n",
+				extEvent->handle, extEvent->page_number,
+				extEvent->maximun_page_number, extEvent->status);
+
+			if (extEvent->status == BT_OK
+				&& extEvent->page_number == 1) {
+				bool sspHost =
+					(extEvent->extended_lmp_features & 0x01) != 0;
+				TRACE_BT("LocalDeviceImpl: Remote SSP host "
+					"support=%d\n", sspHost);
+			}
+
+			// Retrieve pairing chain context and proceed to
+			// Remote_Name_Request → Authentication_Requested
+			const void* addrData;
+			ssize_t addrSize;
+			int16 connHandle = 0;
+			if (request->FindData("bdaddr", B_ANY_TYPE,
+					&addrData, &addrSize) == B_OK
+				&& request->FindInt16("connHandle",
+					&connHandle) == B_OK) {
+				bdaddr_t bdaddr;
+				memcpy(&bdaddr, addrData, sizeof(bdaddr_t));
+				IssueRemoteNameThenAuth(bdaddr, connHandle);
+			}
+
+			ClearWantedEvent(request);
 			break;
+		}
 
 		case HCI_EVENT_SYNCHRONOUS_CONNECTION_COMPLETED:
 			SyncConnectionComplete(
@@ -1102,6 +1198,8 @@ LocalDeviceImpl::CommandStatus(struct hci_ev_cmd_status* event,
 		}
 		break;*/
 
+		case PACK_OPCODE(OGF_LINK_CONTROL, OCF_READ_REMOTE_FEATURES):
+		case PACK_OPCODE(OGF_LINK_CONTROL, OCF_READ_REMOTE_EXT_FEATURES):
 		case PACK_OPCODE(OGF_LINK_CONTROL, OCF_AUTH_REQUESTED):
 		case PACK_OPCODE(OGF_LINK_CONTROL, OCF_SET_CONN_ENCRYPT):
 		{
@@ -1270,11 +1368,7 @@ LocalDeviceImpl::RemoteNameRequestComplete(
 	struct hci_ev_remote_name_request_complete_reply* remotename,
 	BMessage* request)
 {
-	BMessage reply;
-
 	if (remotename->status == BT_OK) {
-		reply.AddString("friendlyname", (const char*)remotename->remote_name );
-
 		// Persist the name if this is a paired device
 		if (fKeyStore != NULL
 			&& fKeyStore->FindLinkKey(remotename->bdaddr, NULL, NULL)) {
@@ -1287,19 +1381,35 @@ LocalDeviceImpl::RemoteNameRequestComplete(
 		}
 	}
 
-	reply.AddInt8("status", remotename->status);
-
 	TRACE_BT("LocalDeviceImpl: %s for %s with status %s\n",
 		BluetoothEvent(HCI_EVENT_REMOTE_NAME_REQUEST_COMPLETE),
 		bdaddrUtils::ToString(remotename->bdaddr).String(),
 		BluetoothError(remotename->status));
+
+	// If this name request is part of the pairing chain, proceed
+	// to Authentication_Requested instead of replying to caller.
+	bool pairingChain = false;
+	int16 connHandle = 0;
+	if (request->FindBool("pairingChain", &pairingChain) == B_OK
+		&& pairingChain
+		&& request->FindInt16("connHandle", &connHandle) == B_OK) {
+		ClearWantedEvent(request);
+		IssueAuthenticationRequested(connHandle);
+		return;
+	}
+
+	// Normal name request — reply to caller
+	BMessage reply;
+	if (remotename->status == BT_OK)
+		reply.AddString("friendlyname",
+			(const char*)remotename->remote_name);
+	reply.AddInt8("status", remotename->status);
 
 	status_t status = request->SendReply(&reply);
 	if (status < B_OK)
 		printf("%s: Error sending reply to BMessage request: %s!\n",
 			__func__, strerror(status));
 
-	// This request is not gonna be used anymore
 	ClearWantedEvent(request);
 }
 
@@ -1378,29 +1488,37 @@ LocalDeviceImpl::ConnectionComplete(struct hci_ev_conn_complete* event,
 				bdaddrUtils::ToString(event->bdaddr).String(), event->handle,
 				event->link_type, event->encrypt_mode);
 
-		// If we initiated the connection (request != NULL) and the
-		// ACL link came up without encryption, kick off SSP by
-		// sending Authentication_Requested.  The controller will
-		// then emit IO_Capability_Request → User_Confirmation →
-		// Simple_Pairing_Complete → Auth_Complete, all of which
-		// are already handled by our event dispatchers.
+		// Track the connection
+		if (event->link_type == 0x01) // ACL
+			_TrackConnection(event->handle, event->bdaddr);
+
+		// BlueZ-style multi-step pairing: gather remote info before
+		// authenticating.  The chain is:
+		//   Read_Remote_Features → Read_Remote_Extended_Features
+		//   → Remote_Name_Request → Authentication_Requested
 		if (event->link_type == 0x01 && event->encrypt_mode == 0
 			&& request != NULL) {
-			TRACE_BT("LocalDeviceImpl: ACL unencrypted, sending "
-				"Authentication_Requested (handle=%#x)\n",
+			TRACE_BT("LocalDeviceImpl: ACL unencrypted, starting "
+				"info-gathering chain (handle=%#x)\n",
 				event->handle);
 
 			size_t size;
-			void* cmd = buildAuthenticationRequested(
+			void* cmd = buildReadRemoteFeatures(
 				event->handle, &size);
 			if (cmd != NULL) {
-				BMessage* authRequest = new BMessage;
-				authRequest->AddInt16("eventExpected",
+				BMessage* featRequest = new BMessage;
+				featRequest->AddInt16("eventExpected",
 					HCI_EVENT_CMD_STATUS);
-				authRequest->AddInt16("opcodeExpected",
+				featRequest->AddInt16("opcodeExpected",
 					PACK_OPCODE(OGF_LINK_CONTROL,
-						OCF_AUTH_REQUESTED));
-				AddWantedEvent(authRequest);
+						OCF_READ_REMOTE_FEATURES));
+				featRequest->AddInt16("eventExpected",
+					HCI_EVENT_RMT_FEATURES);
+				featRequest->AddData("bdaddr", B_ANY_TYPE,
+					&event->bdaddr, sizeof(bdaddr_t));
+				featRequest->AddInt16("connHandle",
+					event->handle);
+				AddWantedEvent(featRequest);
 				fHCIDelegate->IssueCommand(cmd, size);
 				free(cmd);
 			}
@@ -1475,6 +1593,9 @@ LocalDeviceImpl::DisconnectionComplete(
 {
 	TRACE_BT("LocalDeviceImpl: %s: Handle=%#x, reason=%s status=%x\n", __FUNCTION__, event->handle,
 		BluetoothError(event->reason), event->status);
+
+	if (event->status == BT_OK)
+		_UntrackConnection(event->handle);
 
 	if (request != NULL) {
 		BMessage reply;
@@ -2132,6 +2253,98 @@ LocalDeviceImpl::SmpNumericComparisonRequest(
 		event->bdaddr, GetID(), event->numeric_value,
 		event->conn_handle);
 	ncWindow->Show();
+}
+
+
+#if 0
+#pragma mark - ACL Connection Tracking -
+#endif
+
+void
+LocalDeviceImpl::_TrackConnection(uint16 handle, const bdaddr_t& bdaddr)
+{
+	for (int i = 0; i < kMaxConnections; i++) {
+		if (!fConnections[i].active) {
+			fConnections[i].handle = handle;
+			fConnections[i].bdaddr = bdaddr;
+			fConnections[i].active = true;
+			return;
+		}
+	}
+	TRACE_BT("LocalDeviceImpl: Connection table full!\n");
+}
+
+
+void
+LocalDeviceImpl::_UntrackConnection(uint16 handle)
+{
+	for (int i = 0; i < kMaxConnections; i++) {
+		if (fConnections[i].active && fConnections[i].handle == handle) {
+			fConnections[i].active = false;
+			return;
+		}
+	}
+}
+
+
+uint16
+LocalDeviceImpl::FindHandleByAddress(const bdaddr_t& bdaddr) const
+{
+	for (int i = 0; i < kMaxConnections; i++) {
+		if (fConnections[i].active
+			&& bdaddrUtils::Compare(fConnections[i].bdaddr, bdaddr)) {
+			return fConnections[i].handle;
+		}
+	}
+	return 0;
+}
+
+
+#if 0
+#pragma mark - Pairing Chain Helpers -
+#endif
+
+void
+LocalDeviceImpl::IssueRemoteNameThenAuth(bdaddr_t bdaddr, uint16 connHandle)
+{
+	size_t size;
+	void* cmd = buildRemoteNameRequest(bdaddr, 0x01, 0x0000, &size);
+	if (cmd != NULL) {
+		BMessage* nameReq = new BMessage;
+		nameReq->AddInt16("eventExpected", HCI_EVENT_CMD_STATUS);
+		nameReq->AddInt16("opcodeExpected",
+			PACK_OPCODE(OGF_LINK_CONTROL, OCF_REMOTE_NAME_REQUEST));
+		nameReq->AddInt16("eventExpected",
+			HCI_EVENT_REMOTE_NAME_REQUEST_COMPLETE);
+		nameReq->AddBool("pairingChain", true);
+		nameReq->AddInt16("connHandle", connHandle);
+		AddWantedEvent(nameReq);
+		fHCIDelegate->IssueCommand(cmd, size);
+		free(cmd);
+	} else {
+		// Fallback: skip name, go straight to auth
+		IssueAuthenticationRequested(connHandle);
+	}
+}
+
+
+void
+LocalDeviceImpl::IssueAuthenticationRequested(uint16 connHandle)
+{
+	TRACE_BT("LocalDeviceImpl: Sending Authentication_Requested "
+		"(handle=%#x)\n", connHandle);
+
+	size_t size;
+	void* cmd = buildAuthenticationRequested(connHandle, &size);
+	if (cmd != NULL) {
+		BMessage* authReq = new BMessage;
+		authReq->AddInt16("eventExpected", HCI_EVENT_CMD_STATUS);
+		authReq->AddInt16("opcodeExpected",
+			PACK_OPCODE(OGF_LINK_CONTROL, OCF_AUTH_REQUESTED));
+		AddWantedEvent(authReq);
+		fHCIDelegate->IssueCommand(cmd, size);
+		free(cmd);
+	}
 }
 
 

@@ -81,6 +81,10 @@ private:
 	void SimplePairingComplete(struct hci_ev_simple_pairing_complete* event,
 		BMessage* request);
 
+	// Pairing chain helpers (BlueZ-style multi-step flow)
+	void IssueRemoteNameThenAuth(bdaddr_t bdaddr, uint16 connHandle);
+	void IssueAuthenticationRequested(uint16 connHandle);
+
 	// Synchronous connections (SCO/eSCO)
 	void SyncConnectionComplete(
 		struct hci_ev_sychronous_connection_completed* event,
@@ -130,7 +134,23 @@ public:
 	status_t LeSmPairInitiate(bt_le_smp_pair_params* params);
 	status_t LeNcConfirm(uint16 connHandle, bool confirmed);
 
+public:
+	// ACL connection tracking
+	uint16	FindHandleByAddress(const bdaddr_t& bdaddr) const;
+
 private:
+	void	_TrackConnection(uint16 handle, const bdaddr_t& bdaddr);
+	void	_UntrackConnection(uint16 handle);
+
+	// Active ACL connections (handle → bdaddr)
+	static const int		kMaxConnections = 8;
+	struct AclConnection {
+		uint16		handle;
+		bdaddr_t	bdaddr;
+		bool		active;
+	};
+	AclConnection			fConnections[kMaxConnections];
+
 	BluetoothKeyStore*		fKeyStore;
 	bdaddr_t				fLeConnectionAddress;
 	uint16					fLeConnectionHandle;

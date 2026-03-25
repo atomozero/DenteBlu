@@ -204,6 +204,46 @@ buildWriteScan(uint8 scanmode, size_t* outsize)
 
 
 void*
+buildReadRemoteFeatures(uint16 handle, size_t* outsize)
+{
+	CALLED();
+	if (outsize == NULL)
+		return NULL;
+
+	struct hci_cp_read_rmt_features* param;
+	void* command = buildCommand(OGF_LINK_CONTROL, OCF_READ_REMOTE_FEATURES,
+		(void**)&param, sizeof(struct hci_cp_read_rmt_features), outsize);
+
+	if (command != NULL)
+		param->handle = B_HOST_TO_LENDIAN_INT16(handle);
+
+	return command;
+}
+
+
+void*
+buildReadRemoteExtendedFeatures(uint16 handle, uint8 pageNumber,
+	size_t* outsize)
+{
+	CALLED();
+	if (outsize == NULL)
+		return NULL;
+
+	struct hci_cp_read_rmt_ext_features* param;
+	void* command = buildCommand(OGF_LINK_CONTROL,
+		OCF_READ_REMOTE_EXT_FEATURES,
+		(void**)&param, sizeof(struct hci_cp_read_rmt_ext_features), outsize);
+
+	if (command != NULL) {
+		param->handle = B_HOST_TO_LENDIAN_INT16(handle);
+		param->page_number = pageNumber;
+	}
+
+	return command;
+}
+
+
+void*
 buildAuthenticationRequested(uint16 handle, size_t* outsize)
 {
 	CALLED();

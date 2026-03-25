@@ -343,6 +343,12 @@ struct hci_command_header {
 		uint16		handle;
 	} __attribute__ ((packed));
 
+	#define OCF_READ_REMOTE_EXT_FEATURES	0x001C
+	struct hci_cp_read_rmt_ext_features {
+		uint16		handle;
+		uint8		page_number;
+	} __attribute__ ((packed));
+
 	#define OCF_READ_REMOTE_VERSION		0x001D
 	struct hci_cp_read_rmt_version {
 		uint16		handle;
