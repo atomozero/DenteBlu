@@ -44,8 +44,6 @@ BluetoothAudioAddOn::BluetoothAudioAddOn(image_id image)
 
 BluetoothAudioAddOn::~BluetoothAudioAddOn()
 {
-	if (fNodeCreated)
-		unlink("/tmp/.bt_audio_node_lock");
 }
 
 
@@ -79,29 +77,14 @@ BluetoothAudioAddOn::InstantiateNodeFor(const flavor_info* info,
 	BMessage* config, status_t* _error)
 {
 	FILE* f = fopen("/tmp/bt_audio.log", "a");
-	if (f) { fprintf(f, "BluetoothAudioAddOn: InstantiateNodeFor (created=%d)\n",
-		fNodeCreated); fclose(f); }
-
-	/* Only allow one global instance — use a file lock to prevent
-	 * multiple add-on images from creating duplicate nodes */
-	int lockFd = open("/tmp/.bt_audio_node_lock", O_CREAT | O_EXCL | O_WRONLY, 0644);
-	if (lockFd < 0 && errno == EEXIST) {
-		if (f) { f = fopen("/tmp/bt_audio.log", "a");
-			if (f) { fprintf(f, "BluetoothAudioAddOn: SKIP — already instantiated\n"); fclose(f); } }
-		*_error = B_NOT_ALLOWED;
-		return NULL;
-	}
-	if (lockFd >= 0)
-		close(lockFd);
+	if (f) { fprintf(f, "BluetoothAudioAddOn: InstantiateNodeFor\n"); fclose(f); }
 
 	BluetoothAudioNode* node = new(std::nothrow) BluetoothAudioNode(this);
 	if (node == NULL) {
-		unlink("/tmp/.bt_audio_node_lock");
 		*_error = B_NO_MEMORY;
 		return NULL;
 	}
 
-	fNodeCreated = true;
 	*_error = B_OK;
 	return node;
 }

@@ -58,7 +58,8 @@ BluetoothAudioNode::BluetoothAudioNode(BluetoothAudioAddOn* addOn)
 
 BluetoothAudioNode::~BluetoothAudioNode()
 {
-	Quit();
+	if (RunState() != B_UNREGISTERED)
+		Quit();
 	delete fA2dp;
 }
 
