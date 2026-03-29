@@ -25,8 +25,16 @@
 #include <Path.h>
 
 
-#define TRACE(fmt, ...) fprintf(stderr, "BluetoothAudioNode: " fmt, \
-	##__VA_ARGS__)
+static FILE* _bt_audio_log = NULL;
+static FILE* _bt_audio_logfile() {
+	if (_bt_audio_log == NULL)
+		_bt_audio_log = fopen("/tmp/bt_audio.log", "a");
+	return _bt_audio_log ? _bt_audio_log : stderr;
+}
+#define TRACE(fmt, ...) do { \
+	fprintf(_bt_audio_logfile(), "BluetoothAudioNode: " fmt, ##__VA_ARGS__); \
+	fflush(_bt_audio_logfile()); \
+} while(0)
 
 
 static const bigtime_t kBluetoothLatency = 50000; // 50 ms
