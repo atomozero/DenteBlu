@@ -27,6 +27,7 @@ public:
 private:
 			flavor_info			fFlavorInfo;
 			media_format		fInputFormat;
+			bool				fNodeCreated;
 };
 
 
