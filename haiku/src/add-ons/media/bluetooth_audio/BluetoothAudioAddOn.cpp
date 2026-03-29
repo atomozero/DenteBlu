@@ -16,6 +16,8 @@ BluetoothAudioAddOn::BluetoothAudioAddOn(image_id image)
 	:
 	BMediaAddOn(image)
 {
+	FILE* f = fopen("/tmp/bt_audio.log", "a");
+	if (f) { fprintf(f, "BluetoothAudioAddOn: loaded\n"); fclose(f); }
 	memset(&fInputFormat, 0, sizeof(fInputFormat));
 	fInputFormat.type = B_MEDIA_RAW_AUDIO;
 	fInputFormat.u.raw_audio = media_raw_audio_format::wildcard;
@@ -70,6 +72,9 @@ BMediaNode*
 BluetoothAudioAddOn::InstantiateNodeFor(const flavor_info* info,
 	BMessage* config, status_t* _error)
 {
+	FILE* f = fopen("/tmp/bt_audio.log", "a");
+	if (f) { fprintf(f, "BluetoothAudioAddOn: InstantiateNodeFor\n"); fclose(f); }
+
 	BluetoothAudioNode* node = new(std::nothrow) BluetoothAudioNode(this);
 	if (node == NULL) {
 		*_error = B_NO_MEMORY;
