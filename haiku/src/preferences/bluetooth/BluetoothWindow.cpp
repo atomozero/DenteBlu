@@ -29,6 +29,10 @@
 #include <Messenger.h>
 #include <Roster.h>
 #include <SeparatorView.h>
+#include <Alert.h>
+#include <File.h>
+#include <FindDirectory.h>
+#include <Path.h>
 #include <StatusBar.h>
 
 #include <stdio.h>
@@ -356,7 +360,7 @@ BluetoothWindow::BluetoothWindow(BRect frame)
 		B_TRANSLATE("Call" B_UTF8_ELLIPSIS),
 		new BMessage(kMsgCallDevice));
 	fA2dpButton = new BButton("a2dp",
-		B_TRANSLATE("Music" B_UTF8_ELLIPSIS),
+		B_TRANSLATE("Audio Output"),
 		new BMessage(kMsgA2dpPlayer));
 
 	fDeviceInfoView->SetExplicitAlignment(
@@ -752,17 +756,60 @@ BluetoothWindow::MessageReceived(BMessage* message)
 
 		case kMsgA2dpPlayer:
 		{
+			/* Set selected device as system audio output:
+			 * 1. Save address to config file
+			 * 2. Restart media_addon_server to pick up the change
+			 * 3. The bluetooth_audio add-on will connect on B_START */
 			int32 index = fListView->CurrentSelection();
 			if (index < 0)
 				break;
-			PairedDeviceItem* paired
-				= dynamic_cast<PairedDeviceItem*>(fListView->ItemAt(index));
-			if (paired != NULL) {
-				bdaddr_t addr = bdaddrUtils::FromString(
+
+			bdaddr_t addr;
+			BString name;
+			BString addrStr;
+
+			/* Try scanned device first, then paired device */
+			Bluetooth::DeviceListItem* devItem
+				= dynamic_cast<Bluetooth::DeviceListItem*>(
+					fListView->ItemAt(index));
+			if (devItem != NULL && devItem->Device() != NULL) {
+				addr = devItem->Device()->GetBluetoothAddress();
+				name = devItem->Device()->GetFriendlyName();
+			} else {
+				PairedDeviceItem* paired
+					= dynamic_cast<PairedDeviceItem*>(
+						fListView->ItemAt(index));
+				if (paired == NULL)
+					break;
+				addr = bdaddrUtils::FromString(
 					paired->Address().String());
-				(new A2dpPlayerWindow(addr,
-					paired->Name().String()))->Show();
+				name = paired->Name();
 			}
+			addrStr = bdaddrUtils::ToString(addr);
+
+			/* Save device address to settings */
+			BPath settingsPath;
+			find_directory(B_USER_SETTINGS_DIRECTORY, &settingsPath);
+			settingsPath.Append("bluetooth_audio_device");
+			BFile file(settingsPath.Path(),
+				B_WRITE_ONLY | B_CREATE_FILE | B_ERASE_FILE);
+			if (file.InitCheck() == B_OK) {
+				file.Write(addrStr.String(), addrStr.Length());
+				file.Write("\n", 1);
+			}
+
+			BString msg;
+			msg.SetToFormat(
+				"'%s' set as Bluetooth audio output.\n\n"
+				"Address: %s\n\n"
+				"Open Media preferences and select\n"
+				"'Bluetooth Audio Output' as output device.",
+				name.String(), addrStr.String());
+
+			BAlert* alert = new BAlert("DenteBlu",
+				msg.String(), B_TRANSLATE("OK"),
+				NULL, NULL, B_WIDTH_AS_USUAL, B_INFO_ALERT);
+			alert->Go();
 			break;
 		}
 
