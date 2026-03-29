@@ -193,7 +193,7 @@ build_media() {
     done
 
     echo "  → linking bluetooth_audio"
-    if g++ -shared -o "$BUILD/bluetooth_audio" "${OBJS[@]}" \
+    if g++ -shared -o "$BUILD/bluetooth_audio.media_addon" "${OBJS[@]}" \
        -L"$BUILD" -lbe -lmedia -lbluetooth 2>&1; then
         pass "bluetooth_audio linked"
     else
