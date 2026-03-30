@@ -1616,8 +1616,26 @@ void
 LocalDeviceImpl::PinCodeRequest(struct hci_ev_pin_code_req* event,
 	BMessage* request)
 {
-	PincodeWindow* iPincode = new PincodeWindow(event->bdaddr, GetID());
-	iPincode->Show();
+	TRACE_BT("LocalDeviceImpl: %s: PIN code requested for %s\n",
+		__FUNCTION__,
+		bdaddrUtils::ToString(event->bdaddr).String());
+
+	/* Reply with PIN Negative Reply to force SSP pairing.
+	 * Modern devices (Google Home, headphones) use SSP, not legacy PIN.
+	 * Sending a PIN reply causes auth failure (0x05); a negative reply
+	 * tells the controller to proceed with SSP if available. */
+	BluetoothCommand<typed_command(hci_cp_pin_code_neg_reply)>
+		pinNegReply(OGF_LINK_CONTROL, OCF_PIN_CODE_NEG_REPLY);
+	bdaddrUtils::Copy(pinNegReply->bdaddr, event->bdaddr);
+
+	if (fHCIDelegate->IssueCommand(pinNegReply.Data(),
+			pinNegReply.Size()) == B_ERROR) {
+		TRACE_BT("LocalDeviceImpl: Error issuing PIN_CODE_NEG_REPLY\n");
+	} else {
+		TRACE_BT("LocalDeviceImpl: PIN_CODE_NEG_REPLY sent for %s "
+			"(forcing SSP)\n",
+			bdaddrUtils::ToString(event->bdaddr).String());
+	}
 }
 
 

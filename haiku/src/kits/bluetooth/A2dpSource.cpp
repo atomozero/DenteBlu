@@ -22,6 +22,7 @@
 #include <bluetooth/bdaddrUtils.h>
 #include <bluetooth/HCI/btHCI.h>
 #include <bluetooth/HCI/btHCI_command.h>
+#include <bluetooth/LocalDevice.h>
 #include <bluetooth/HCI/btHCI_event.h>
 #include <bluetooth/L2CAP/btL2CAP.h>
 #include <bluetooth/avdtp.h>
@@ -427,7 +428,14 @@ A2dpSource::_EnsureAclConnection(const bdaddr_t& remote)
 		return false;
 	}
 
-	/* Acquire local HCI device */
+	/* Acquire local HCI device — GetLocalDevice() enables SSP
+	 * (Write_Simple_Pairing_Mode) which is required for modern
+	 * devices like Google Home to accept authentication. */
+	if (LocalDevice::GetLocalDevice() == NULL) {
+		TRACE_A2DP("No local Bluetooth device found\n");
+		return false;
+	}
+
 	BMessage acquire(BT_MSG_ACQUIRE_LOCAL_DEVICE);
 	BMessage acquireReply;
 	if (messenger.SendMessage(&acquire, &acquireReply,
@@ -503,80 +511,19 @@ A2dpSource::_EnsureAclConnection(const bdaddr_t& remote)
 	TRACE_A2DP("ACL connected (handle=0x%04X)\n",
 		(unsigned)(uint16)handle);
 
-	if (handle < 0)
-		return true;
-
-	/* Authenticate */
-	{
-		BluetoothCommand<typed_command(hci_cp_auth_requested)>
-			authCmd(OGF_LINK_CONTROL, OCF_AUTH_REQUESTED);
-		authCmd->handle = (uint16)handle;
-
-		BMessage authReq(BT_MSG_HANDLE_SIMPLE_REQUEST);
-		BMessage authReply;
-		authReq.AddInt32("hci_id", hid);
-		authReq.AddData("raw command", B_ANY_TYPE,
-			authCmd.Data(), authCmd.Size());
-		authReq.AddInt16("eventExpected", HCI_EVENT_CMD_STATUS);
-		authReq.AddInt16("opcodeExpected",
-			PACK_OPCODE(OGF_LINK_CONTROL, OCF_AUTH_REQUESTED));
-		authReq.AddInt16("eventExpected", HCI_EVENT_LINK_KEY_REQ);
-		authReq.AddInt16("eventExpected", HCI_EVENT_IO_CAPABILITY_REQUEST);
-		authReq.AddInt16("eventExpected", HCI_EVENT_IO_CAPABILITY_RESPONSE);
-		authReq.AddInt16("eventExpected",
-			HCI_EVENT_USER_CONFIRMATION_REQUEST);
-		authReq.AddInt16("eventExpected",
-			HCI_EVENT_SIMPLE_PAIRING_COMPLETE);
-		authReq.AddInt16("eventExpected", HCI_EVENT_LINK_KEY_NOTIFY);
-		authReq.AddInt16("eventExpected", HCI_EVENT_AUTH_COMPLETE);
-
-		TRACE_A2DP("Sending Authentication Requested...\n");
-		result = messenger.SendMessage(&authReq, &authReply,
-			B_INFINITE_TIMEOUT, 30000000LL);
-		int8 authStatus = BT_ERROR;
-		if (result == B_TIMED_OUT) {
-			TRACE_A2DP("Authentication timed out (SSP may need more time)\n");
-		} else if (result == B_OK) {
-			authReply.FindInt8("status", &authStatus);
-		}
-		TRACE_A2DP("Auth result: transport=%s hci_status=0x%02X\n",
-			strerror(result), (unsigned)(uint8)authStatus);
-		if (authStatus != BT_OK) {
-			TRACE_A2DP("Authentication failed (0x%02X)\n",
-				(unsigned)(uint8)authStatus);
-			return false;
-		}
-		TRACE_A2DP("Authentication succeeded, link key should be saved\n");
-	}
-
-	/* Encrypt */
-	{
-		BluetoothCommand<typed_command(hci_cp_set_conn_encrypt)>
-			encCmd(OGF_LINK_CONTROL, OCF_SET_CONN_ENCRYPT);
-		encCmd->handle = (uint16)handle;
-		encCmd->encrypt = 1;
-
-		BMessage encReq(BT_MSG_HANDLE_SIMPLE_REQUEST);
-		BMessage encReply;
-		encReq.AddInt32("hci_id", hid);
-		encReq.AddData("raw command", B_ANY_TYPE,
-			encCmd.Data(), encCmd.Size());
-		encReq.AddInt16("eventExpected", HCI_EVENT_CMD_STATUS);
-		encReq.AddInt16("opcodeExpected",
-			PACK_OPCODE(OGF_LINK_CONTROL, OCF_SET_CONN_ENCRYPT));
-		encReq.AddInt16("eventExpected", HCI_EVENT_ENCRYPT_CHANGE);
-
-		result = messenger.SendMessage(&encReq, &encReply,
-			B_INFINITE_TIMEOUT, 10000000LL);
-		int8 encStatus = BT_ERROR;
-		if (result == B_OK)
-			encReply.FindInt8("status", &encStatus);
-		if (encStatus != BT_OK) {
-			TRACE_A2DP("Encryption failed (0x%02X)\n",
-				(unsigned)(uint8)encStatus);
-			return false;
-		}
-	}
+	/* Do NOT send Authentication_Requested or Set_Connection_Encryption
+	 * from here. Like BlueZ, authentication should be handled by the
+	 * server's connection complete handler (which triggers SSP pairing
+	 * automatically). Sending duplicate auth commands conflicts with
+	 * the server's pairing chain and causes auth failures.
+	 *
+	 * The server's ConnectionComplete handler already initiates:
+	 *   Read_Remote_Features → Remote_Name_Request → auth/encrypt
+	 * Wait briefly for the server's chain to complete, then proceed
+	 * to open AVDTP. The L2CAP connect will succeed if the remote
+	 * device accepted the connection (pairing mode or already paired). */
+	TRACE_A2DP("Waiting for server pairing chain...\n");
+	snooze(4000000); /* 4s for server to complete auth+encrypt chain */
 
 	return true;
 }
