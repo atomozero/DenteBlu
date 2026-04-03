@@ -299,10 +299,9 @@ A2dpSource::SendAudio(const int16* pcm, size_t sampleCount)
 	uint16 samplesPerFrame = fEncoder->SamplesPerFrame();
 	uint8 channels = fEncoder->Channels();
 
-	/* Calculate max SBC frames per RTP packet.
-	 * L2CAP default MTU is 672; media MTU may differ.
-	 * RTP header (12) + media header (1) + N * frameLen <= MTU.
-	 * Use 672 as conservative MTU estimate. */
+	/* Pack multiple SBC frames per RTP packet for efficiency.
+	 * L2CAP default MTU is 672; use conservative estimate.
+	 * RTP header (12) + media header (1) + N * frameLen <= MTU. */
 	uint16 mtu = 672;
 	uint8 maxFramesPerPacket = (mtu - 13) / frameLen;
 	if (maxFramesPerPacket > 15)
@@ -741,8 +740,8 @@ A2dpSource::_BuildRtpPacket(const uint8* sbcFrames, uint8 frameCount,
 	fRtpBuf[11] = (uint8)(fSsrc & 0xFF);
 
 	/* A2DP SBC media payload header (1 byte)
-	 * Bits 7-4: reserved (0), Bits 3-0: number of SBC frames */
-	fRtpBuf[12] = frameCount & 0x0F;
+	 * Bits 7-4: number of SBC frames, Bits 3-0: RFA/L/S/F (0) */
+	fRtpBuf[12] = (frameCount & 0x0F) << 4;
 
 	/* SBC frame data */
 	memcpy(fRtpBuf + 13, sbcFrames, totalSbcLen);
