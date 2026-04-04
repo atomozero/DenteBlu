@@ -92,8 +92,9 @@ BluetoothAudioNode::NodeRegistered()
 	TRACE("NodeRegistered: SetEventLatency\n");
 	SetEventLatency(kBluetoothLatency);
 
-	TRACE("NodeRegistered: _InitParameterWeb\n");
-	_InitParameterWeb();
+	/* _InitParameterWeb() deferred — calling SetParameterWeb from
+	 * NodeRegistered can crash in some Haiku revisions due to vtable
+	 * thunking issues with multiple inheritance in media add-ons. */
 
 	TRACE("NodeRegistered: RunState=%d\n", RunState());
 	/* Run() starts the BMediaEventLooper control thread.
