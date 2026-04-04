@@ -185,8 +185,24 @@ main(int argc, char** argv)
 	int64 totalSent = 0;
 	int lastPercent = -1;
 
-	/* Volume boost — find peak and normalize, or apply fixed gain */
-	float gain = 8.0f; /* +18dB boost for quiet tracks */
+	/* Volume boost for quiet tracks */
+	float gain = 4.0f; /* +12dB */
+
+	/* Resampling: if the decoder provides a different rate than A2DP
+	 * needs, we resample with linear interpolation */
+	bool needResample = (decodedRate != sampleRate);
+	double resampleRatio = needResample
+		? (double)sampleRate / (double)decodedRate : 1.0;
+	if (needResample) {
+		printf("Resampling: %u Hz → %u Hz (ratio %.4f)\n",
+			decodedRate, sampleRate, resampleRatio);
+	}
+
+	/* Resampled output buffer (larger if upsampling) */
+	size_t resampledMaxSamples = (size_t)(bufSamples * resampleRatio) + 128;
+	int16* resampledBuf = needResample
+		? (int16*)malloc(resampledMaxSamples * channels * sizeof(int16))
+		: NULL;
 
 	while (!sQuit) {
 		int64 framesToRead = bufSamples;
@@ -202,15 +218,44 @@ main(int argc, char** argv)
 			pcmBuf[i] = (int16)sample;
 		}
 
+		int16* sendBuf = pcmBuf;
+		size_t sendSamples = (size_t)framesToRead;
+
+		/* Resample if needed (linear interpolation) */
+		if (needResample && resampledBuf != NULL) {
+			size_t outSamples = (size_t)(framesToRead * resampleRatio);
+			if (outSamples > resampledMaxSamples)
+				outSamples = resampledMaxSamples;
+
+			for (size_t i = 0; i < outSamples; i++) {
+				double srcPos = (double)i / resampleRatio;
+				size_t idx = (size_t)srcPos;
+				double frac = srcPos - idx;
+
+				if (idx + 1 >= (size_t)framesToRead)
+					idx = (size_t)framesToRead - 2;
+
+				for (uint8 ch = 0; ch < channels; ch++) {
+					int32 s0 = pcmBuf[idx * channels + ch];
+					int32 s1 = pcmBuf[(idx + 1) * channels + ch];
+					resampledBuf[i * channels + ch]
+						= (int16)(s0 + (int32)((s1 - s0) * frac));
+				}
+			}
+
+			sendBuf = resampledBuf;
+			sendSamples = outSamples;
+		}
+
 		/* Diagnostic: dump first PCM samples to verify data is non-zero */
 		if (totalSent == 0) {
-			fprintf(stderr, "First PCM samples (after gain): ");
-			for (int d = 0; d < 16 && d < framesToRead * channels; d++)
-				fprintf(stderr, "%d ", pcmBuf[d]);
+			fprintf(stderr, "First PCM samples (after processing): ");
+			for (int d = 0; d < 16 && d < (int)(sendSamples * channels); d++)
+				fprintf(stderr, "%d ", sendBuf[d]);
 			fprintf(stderr, "\n");
 		}
 
-		err = source.SendAudio(pcmBuf, (size_t)framesToRead);
+		err = source.SendAudio(sendBuf, sendSamples);
 		if (err != B_OK) {
 			printf("\nSendAudio failed: %s\n", strerror(err));
 			break;
@@ -235,6 +280,7 @@ main(int argc, char** argv)
 		(float)totalSent / sampleRate);
 
 	free(pcmBuf);
+	free(resampledBuf);
 	source.StopStream();
 	source.Disconnect();
 	return 0;
