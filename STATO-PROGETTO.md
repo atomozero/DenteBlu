@@ -1,4 +1,4 @@
-# DenteBlu — Stato del progetto (marzo 2026)
+# DenteBlu — Stato del progetto (aprile 2026)
 
 ## Cos'è
 
@@ -6,7 +6,11 @@ Stack Bluetooth completo per Haiku OS: HCI, L2CAP, SDP, RFCOMM, ATT/GATT, SMP, p
 
 ## Hardware di test
 
-Intel AX201 Bluetooth (USB 8087:0026) su Intel Core i7-1165G7 (Tiger Lake), Haiku R1 beta5 hrev59484.
+- Broadcom BCM2070 (USB, dongle Foxconn T77H114) — **funzionante**
+- Google Home — A2DP audio verificato
+- Google Pixel Buds — connessione A2DP verificata
+- Intel AX201 (USB 8087:0026, Tiger Lake) — firmware loader funzionante, bloccato da bug kernel smp.cpp
+- Haiku R1 beta5 hrev59506–hrev59571
 
 ## Cosa funziona
 
@@ -21,7 +25,30 @@ Il chip si riconnette con firmware operativo. Il driver drena i vendor events di
 **Supporto SCO/eSCO:**
 Il driver enumera gli endpoint isochronous da USB interface 1 alt 1 e gestisce il lifecycle (init/cancel/purge) in tutto il ciclo device_open/close/removed. Le funzioni submit_rx_sco/submit_tx_sco sono scheletri pronti per l'integrazione audio.
 
-## Fix recenti
+## Cosa funziona (aprile 2026)
+
+### A2DP Source — streaming audio su speaker BT
+Riproduzione MP3/WAV su Google Home via `bt_a2dp_play`. Encoder SBC
+reference (libsbc), pacing RTP uniforme ~11ms, auto-gain, resampling.
+Testato: 3+ minuti di streaming continuo senza interruzioni.
+
+### Compilazione completa senza Jam
+`build.sh` compila l'intero stack (106 target) con g++ diretto:
+lib, server, preferenze, media add-on, kernel modules, 35 test.
+
+### Kernel modules btCoreData e l2cap
+Compilati out-of-tree con simboli @KERNEL_BASE corretti, KDEBUG=1.
+Caricati e funzionanti nel kernel.
+
+### Media add-on bluetooth_audio
+Il nodo "Bluetooth Audio Output" si istanzia nel media_addon_server
+e si connette ad A2DP. Il routing dei buffer dal mixer è in sviluppo.
+
+### Preferenze Bluetooth
+Scansione automatica, lista dispositivi compatta (2 righe: nome + tipo),
+pulsante Pair con supporto SSP.
+
+## Fix recenti (aprile 2026)
 
 ### Race condition use-after-free in L2capEndpoint::Free() (risolto)
 

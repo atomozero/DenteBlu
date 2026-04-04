@@ -3,7 +3,7 @@
 Parti mancanti per raggiungere compatibilita' completa con le specifiche
 Bluetooth (rispetto a stack maturi come BlueZ su Linux o FreeBSD).
 
-Ultimo aggiornamento: marzo 2026.
+Ultimo aggiornamento: aprile 2026.
 
 
 ## Priorita' alta (bloccano use-case reali)
@@ -16,12 +16,13 @@ e' implementato. Senza questo, HFP non puo' trasmettere audio voce.
 - **Stima**: ~500 righe
 - **Dipendenza**: fix XHCI isoc (vedi `tools/haiku_ticket_xhci_isoc.md`)
 
-### 2. Test hardware profili audio
-A2DP Source, AVRCP Target, HFP AG e SCO sono completi a livello di codice
-e unit test, ma mai testati con cuffie BT reali.
-- **Serve**: adattatore BT 2.1+EDR + cuffie A2DP standard
-- **Rischio**: possibili bug nel pacing RTP, nel codec negotiation, o nel
-  media add-on lifecycle
+### 2. ~~Test hardware profili audio~~ (RISOLTO — aprile 2026)
+A2DP Source testato con successo su Google Home e Pixel Buds
+con dongle BCM2070.
+MP3 riprodotto per 3+ minuti senza interruzioni.
+- Encoder SBC sostituito con libsbc (reference BlueZ)
+- RTP pacing uniforme (~11ms/pacchetto)
+- Da completare: media add-on per routing audio di sistema
 
 ### 3. Fix kernel smp.cpp (Tiger Lake / Alder Lake)
 Il panic in `find_free_message()` impedisce l'uso di Intel AX201.
