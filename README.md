@@ -4,16 +4,40 @@ Complete Bluetooth stack (Classic BR/EDR + BLE) for Haiku OS, from USB driver to
 
 ## Status
 
-The stack works with USB Bluetooth 2.0 dongles (BCM2045, CSR chipsets, etc.) on Haiku R1 beta5. Pairing, SDP discovery, and SPP/RFCOMM profiles are operational.
+**A2DP audio streaming is working.** MP3/WAV files play on Bluetooth speakers (tested with Google Home) via the `bt_a2dp_play` command. The SBC encoder uses the reference libsbc implementation with proper RTP pacing.
 
-For **Intel AX201** chips (USB 8087:0026), the firmware loader is implemented and completes the full download (801KB, 3233 fragments via Secure Send). The chip reboots with operational firmware. Integration with bluetooth_server is in progress — see [Intel firmware loader](#intel-firmware-loader).
+The stack works with USB Bluetooth 2.0 dongles (BCM2045, BCM2070, CSR chipsets) on Haiku R1 beta5 (hrev59506+). Classic inquiry, device discovery, A2DP Source, and SSP pairing are operational.
+
+For **Intel AX201** chips (USB 8087:0026), the firmware loader completes the full two-phase download. Integration with bluetooth_server is in progress.
+
+## A2DP Audio — Quick Start
+
+```sh
+# 1. Start the Bluetooth server
+/boot/system/non-packaged/servers/bluetooth_server &
+
+# 2. Play audio to a Bluetooth speaker
+LD_LIBRARY_PATH=/boot/system/non-packaged/lib \
+  bt_a2dp_play <BD_ADDR> /path/to/music.mp3
+
+# 3. Or send a test tone
+LD_LIBRARY_PATH=/boot/system/non-packaged/lib \
+  bt_a2dp_source_test <BD_ADDR> --tone
+```
+
+Features:
+- SBC encoding via libsbc (BlueZ reference implementation)
+- Automatic sample rate negotiation (44100/48000 Hz)
+- Resampling for files at non-standard rates (e.g. 11025 → 44100 Hz)
+- Auto-gain normalization for quiet/8-bit audio files
+- Uniform RTP pacing (~11ms per packet, 4 SBC frames)
 
 ## Architecture
 
 ```
-Applications / Preferences GUI
+Applications / Preferences GUI / bt_a2dp_play
         │ BMessage IPC
-   libbluetooth.so  (profiles, RFCOMM, OBEX, AVDTP, SBC codec)
+   libbluetooth.so  (A2DP, RFCOMM, OBEX, AVDTP, SBC via libsbc)
         │ ioctl on /dev/bluetooth/h2/0
    bluetooth_server  (LocalDeviceImpl, SDP server, KeyStore)
         │ ioctl
@@ -24,7 +48,24 @@ Four layers, ~60,000 lines of C++ across 252 source files.
 
 ## Building
 
-Requires a Haiku source checkout. Copy DenteBlu files to the matching paths in the Haiku source tree. Build system is Jam.
+### With build.sh (recommended, no Jam required)
+
+```sh
+./build.sh all      # Compiles everything: lib, server, prefs, media, kernel, 35 tests
+./build.sh lib      # libbluetooth.so only
+./build.sh server   # bluetooth_server
+./build.sh prefs    # Bluetooth preferences app
+./build.sh media    # bluetooth_audio media add-on
+./build.sh kernel   # btCoreData + l2cap kernel modules
+./build.sh tests    # 35 test binaries
+./build.sh clean    # Remove build/
+```
+
+Requires: `g++`, `libsbc` (`pkgman install sbc sbc_devel`).
+
+### With Jam (Haiku source tree)
+
+Requires a full Haiku source checkout with DenteBlu files copied to matching paths.
 
 ```sh
 jam h2generic        # USB driver + Intel firmware loader
@@ -40,63 +81,85 @@ jam btCoreData       # core data kernel module
 # Userspace (replaceable at runtime)
 cp bluetooth_server  /boot/system/non-packaged/servers/
 cp libbluetooth.so   /boot/system/non-packaged/lib/
+cp Bluetooth         /boot/system/non-packaged/preferences/
+
+# Media add-on (restart media_server to detect)
+cp bluetooth_audio.media_addon /boot/system/non-packaged/add-ons/media/
 
 # Kernel (requires reboot)
+cp btCoreData  /boot/system/non-packaged/add-ons/kernel/bluetooth/
+cp l2cap       /boot/system/non-packaged/add-ons/kernel/network/protocols/
 cp h2generic   /boot/system/non-packaged/add-ons/kernel/drivers/bin/
 ln -sf ../../../bin/h2generic \
   /boot/system/non-packaged/add-ons/kernel/drivers/dev/bluetooth/h2/h2generic
-cp btCoreData  /boot/system/non-packaged/add-ons/kernel/bluetooth/
-cp hci         /boot/system/non-packaged/add-ons/kernel/bluetooth/
-cp l2cap       /boot/system/non-packaged/add-ons/kernel/network/protocols/
 ```
 
 h2generic **must** go in `drivers/bin/` with a symlink in `drivers/dev/bluetooth/h2/`. Haiku devfs only loads drivers from `drivers/bin/`.
-
-## Intel firmware loader
-
-The `btintel.cpp` module handles Intel chips that require firmware download over USB:
-
-1. Read Intel Version (0xFC05) — detects bootloader mode (`fw_variant=0x06`)
-2. Read Boot Params (0xFC0D), load `.sfi` from `/boot/system/non-packaged/data/firmware/intel/`
-3. Download via Secure Send (0xFC09) on bulk endpoint
-4. Intel Reset (0xFC01) — chip reboots USB
-5. Drain boot events, Read Version → `fw_variant=0x23` (operational)
-6. DDC loading (0xFC8B), Intel Event Mask (0xFC52)
-
-Firmware files are available from the [linux-firmware](https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/tree/intel) repository (e.g. `ibt-19-0-4.sfi`, `ibt-19-0-4.ddc`).
-
-**Note:** Tiger Lake/Alder Lake machines hit a kernel bug in `smp.cpp` that causes KDL during heavy XHCI activity. See `smp-fix-ticket.md` for the analysis and patch.
 
 ## Implemented profiles
 
 | Profile | Status |
 |---------|--------|
+| **A2DP Source** | **Working** — audio streams to BT speakers/headphones |
 | SPP (Serial Port) | Working |
 | PBAP (Phone Book) | Implemented |
 | OPP (Object Push) | Implemented |
-| A2DP (Audio) | Implemented, untested on HW |
-| HFP (Hands-Free) | Implemented, untested on HW |
-| AVRCP (Remote Control) | Implemented, untested on HW |
+| A2DP Sink | Implemented, untested |
+| HFP (Hands-Free) | Implemented, untested |
+| AVRCP (Remote Control) | Implemented, not wired to media |
 | SCO/eSCO (Sync audio) | USB endpoints ready, streaming TBD |
 | ATT/GATT (BLE) | Implemented |
 
-## Comparison with upstream Haiku (March 2026)
+## Intel firmware loader
 
-Haiku's built-in Bluetooth stack only covers a partially-working L2CAP (recently rewritten by waddlesplash) and an incomplete SDP userland. There are no profiles, no BLE, and no working SSP pairing on modern devices. Upstream work is currently focused on basic HCI event handling patches.
+The `btintel.cpp` module handles Intel chips requiring firmware download:
 
-DenteBlu provides all of the above plus: full HCI with Intel firmware loading, 10 SDP service records, RFCOMM, ATT/GATT, SMP (P-192 + P-256), and seven application profiles (SPP, PBAP, OPP, A2DP Source/Sink, AVRCP, HFP Client/AG), a Media Kit audio add-on, SCO audio support, BLE/NUS client, and a preferences GUI with Deskbar replicant.
+1. Read Intel Version (0xFC05) — detects bootloader mode (`fw_variant=0x06`)
+2. Read Boot Params (0xFC0D), load `.sfi` from `/boot/system/non-packaged/data/firmware/intel/`
+3. Download via Secure Send (0xFC09) on bulk endpoint
+4. Intel Reset (0xFC01) — chip reboots USB, retry Read Version (3 attempts)
+5. Drain boot events, Read Version → `fw_variant=0x23` (operational)
+6. DDC loading (0xFC8B), Intel Event Mask (0xFC52)
 
-See `TODO.md` for features still missing toward full BT spec coverage.
+Firmware from [linux-firmware](https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/tree/intel) (e.g. `ibt-19-0-4.sfi`, `.ddc`).
+
+## Media add-on (bluetooth_audio)
+
+The `bluetooth_audio.media_addon` integrates with Haiku's media kit as a `BBufferConsumer`. It appears as "Bluetooth Audio Output" in Media Preferences.
+
+**Current status:** The node instantiates and registers correctly in the media_addon_server. A2DP connection and StartStream succeed. Audio routing from the mixer to the node is under development — see `ROADMAP.md` for details.
+
+## Preferences app
+
+The Bluetooth preferences app provides:
+- Automatic device scanning (classic inquiry)
+- Device list with name and type (2-line compact view)
+- Pair button with SSP support
+- Service query, terminal, file send
 
 ## Known issues
 
-- Kernel bug in `smp.cpp` on Tiger Lake causes KDL during USB reconnection after Intel firmware load — see `smp-fix-ticket.md`
-- Android won't open incoming RFCOMM to Haiku (likely needs Secure Connections P-256; BCM2070 only has P-192)
-- L2CAP PSM leak if a process is SIGKILLed (workaround: reboot)
+- Media add-on: mixer does not forward buffers to BT node (routing issue under investigation)
+- Tiger Lake/Alder Lake kernel bug in `smp.cpp` causes KDL during XHCI activity
+- Android won't open incoming RFCOMM (needs SC P-256; BCM2070 only has P-192)
+- L2CAP PSM leak if process is SIGKILLed (workaround: reboot)
 
-## Fixed issues
+## Fixed issues (April 2026)
 
-- **Use-after-free in L2capEndpoint::Free()** — race between socket close and HCI disconnect caused spinlock panic (KDL) when `free_command_idents_by_pointer()` accessed a destroyed `HciConnection::fLock`. Fixed by validating connection liveness in btCoreData and reordering `Free()` to read `fConnection` before unbinding from channel maps.
+- **A2DP audio mute** — SBC encoder replaced with libsbc reference; RTP media header frame count fixed (bits 3-0, not 7-4); pacing fixed to uniform ~11ms per packet
+- **Use-after-free in btCoreData** — RemoveConnection/AddConnection race; ConnectionByHandle freed memory access; delete under lock deadlock resolved
+- **L2capEndpoint::Free() race** — reordered to read fConnection before unbinding from channel maps
+- **Media add-on crash** — InitParameterWeb called before Run(); removed redundant HandleMessage dispatch; fixed GetNextInput stale source
+- **StopStream crash** — robust socket checks in AvdtpSession Suspend/Close/_RecvSignal
+- **Server buffer overflow** — bounds check in InquiryResult handlers
+- **Incoming connection filter** — reject connections from unknown devices
+
+## Other documentation
+
+- `ROADMAP.md` — prioritized plan of remaining work
+- `CLAUDE.md` — developer guide for the codebase
+- `DEVELOPER_PROMPT.md` — comprehensive developer handbook (Italian)
+- `STATO-PROGETTO.md` — project status (Italian)
 
 ## License
 
