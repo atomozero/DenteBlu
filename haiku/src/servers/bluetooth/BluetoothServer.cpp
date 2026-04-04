@@ -77,11 +77,17 @@ BluetoothServer::BluetoothServer()
 
 	// Load persisted Bluetooth keys (link keys and LTKs)
 	status_t status = fKeyStore.Load();
-	if (status == B_OK)
-		TRACE_BT("BluetoothServer: Key store loaded\n");
-	else
+	if (status == B_OK) {
+		int32 keyCount = 0;
+		const BMessage& keys = fKeyStore.Keys();
+		type_code type;
+		keys.GetInfo("link_key_addr", &type, &keyCount);
+		TRACE_BT("BluetoothServer: Key store loaded (%d link keys)\n",
+			(int)keyCount);
+	} else {
 		TRACE_BT("BluetoothServer: No key store found (status=%" B_PRId32
 			"), starting fresh\n", status);
+	}
 }
 
 
