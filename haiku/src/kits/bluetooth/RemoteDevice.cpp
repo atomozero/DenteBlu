@@ -217,8 +217,8 @@ RemoteDevice::Authenticate()
 	}
 
 	/* 0x0B = ACL Connection Already Exists — connection is already up
-	 * from the inquiry phase.  Retrieve the handle and send
-	 * Authentication Requested directly. */
+	 * from the inquiry phase.  Send Authentication Requested to trigger
+	 * SSP pairing on the existing link. */
 	if ((uint8)btStatus == 0x0B) {
 		/* Ask server for the existing handle */
 		BMessage getConn(BT_MSG_GET_PROPERTY);
@@ -231,8 +231,38 @@ RemoteDevice::Authenticate()
 				B_INFINITE_TIMEOUT, 5000000LL) == B_OK)
 			getReply.FindInt16("handle", (int16*)&fHandle);
 
-		if (fHandle > 0)
-			return true;
+		if (fHandle <= 0)
+			return false;
+
+		/* Trigger authentication/SSP on existing ACL link */
+		BluetoothCommand<typed_command(hci_cp_auth_requested)>
+			authCmd(OGF_LINK_CONTROL, OCF_AUTH_REQUESTED);
+		authCmd->handle = (uint16)fHandle;
+
+		BMessage authReq(BT_MSG_HANDLE_SIMPLE_REQUEST);
+		BMessage authReply;
+		authReq.AddInt32("hci_id", fDiscovererLocalDevice->ID());
+		authReq.AddData("raw command", B_ANY_TYPE,
+			authCmd.Data(), authCmd.Size());
+		authReq.AddInt16("eventExpected", HCI_EVENT_CMD_STATUS);
+		authReq.AddInt16("opcodeExpected",
+			PACK_OPCODE(OGF_LINK_CONTROL, OCF_AUTH_REQUESTED));
+		authReq.AddInt16("eventExpected", HCI_EVENT_LINK_KEY_REQ);
+		authReq.AddInt16("eventExpected", HCI_EVENT_IO_CAPABILITY_REQUEST);
+		authReq.AddInt16("eventExpected", HCI_EVENT_IO_CAPABILITY_RESPONSE);
+		authReq.AddInt16("eventExpected",
+			HCI_EVENT_USER_CONFIRMATION_REQUEST);
+		authReq.AddInt16("eventExpected",
+			HCI_EVENT_SIMPLE_PAIRING_COMPLETE);
+		authReq.AddInt16("eventExpected", HCI_EVENT_LINK_KEY_NOTIFY);
+		authReq.AddInt16("eventExpected", HCI_EVENT_AUTH_COMPLETE);
+
+		int8 authStatus = BT_ERROR;
+		if (fMessenger->SendMessage(&authReq, &authReply,
+				B_INFINITE_TIMEOUT, 30000000LL) == B_OK)
+			authReply.FindInt8("status", &authStatus);
+
+		return (authStatus == BT_OK);
 	}
 
 	return false;
