@@ -16,14 +16,20 @@ For **Intel AX201** chips (USB 8087:0026), the firmware loader completes the ful
 # 1. Start the Bluetooth server
 /boot/system/non-packaged/servers/bluetooth_server &
 
-# 2. Play audio to a Bluetooth speaker
-LD_LIBRARY_PATH=/boot/system/non-packaged/lib \
-  bt_a2dp_play <BD_ADDR> /path/to/music.mp3
+# 2. Find your speaker's BD address (put it in pairing mode first)
+LD_LIBRARY_PATH=/boot/system/non-packaged/lib bt_scan
+# Check /tmp/bt_server.log for: InquiryResult: device XX:XX:XX:XX:XX:XX
 
-# 3. Or send a test tone
+# 3. Play audio to the Bluetooth speaker
 LD_LIBRARY_PATH=/boot/system/non-packaged/lib \
-  bt_a2dp_source_test <BD_ADDR> --tone
+  bt_a2dp_play XX:XX:XX:XX:XX:XX /path/to/music.mp3
+
+# 4. Or send a test tone (440Hz, 10 seconds)
+LD_LIBRARY_PATH=/boot/system/non-packaged/lib \
+  bt_a2dp_source_test XX:XX:XX:XX:XX:XX --tone
 ```
+
+Replace `XX:XX:XX:XX:XX:XX` with the BD address found in step 2.
 
 Features:
 - SBC encoding via libsbc (BlueZ reference implementation)
