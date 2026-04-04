@@ -138,6 +138,11 @@ void BluetoothServer::ReadyToRun(void)
 
 	_InstallDeskbarIcon();
 
+	/* Schedule auto-reconnect of paired devices after 5 seconds,
+	 * giving time for device discovery and HCI initialization */
+	BMessageRunner::StartSending(BMessenger(this),
+		new BMessage('aRcn'), 5000000, 1);
+
 	// Spawn the SDP server thread
 	fSDPThreadID = spawn_thread(SDPServerThread, "SDP server thread",
 		B_NORMAL_PRIORITY, this);
@@ -161,6 +166,29 @@ void BluetoothServer::MessageReceived(BMessage* message)
 
 	switch (message->what)
 	{
+		case 'aRcn': /* Auto-reconnect paired devices */
+		{
+			TRACE_BT("BluetoothServer: Auto-reconnect check\n");
+			const BMessage& keys = fKeyStore.Keys();
+			int32 i = 0;
+			const void* addrData;
+			ssize_t addrSize;
+			while (keys.FindData("link_key_addr", B_ANY_TYPE, i,
+					&addrData, &addrSize) == B_OK) {
+				if (addrSize == sizeof(bdaddr_t)) {
+					bdaddr_t addr = *(const bdaddr_t*)addrData;
+					if (fKeyStore.HasAutoReconnect(addr)) {
+						TRACE_BT("BluetoothServer: Would auto-reconnect %s\n",
+							bdaddrUtils::ToString(addr).String());
+						/* TODO: initiate A2DP connection to this device */
+					}
+				}
+				i++;
+			}
+			status = B_WOULD_BLOCK;
+			break;
+		}
+
 		case BT_MSG_ADD_DEVICE:
 		{
 			BString str;
