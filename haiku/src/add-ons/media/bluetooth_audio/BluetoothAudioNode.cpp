@@ -157,6 +157,8 @@ BluetoothAudioNode::HandleEvent(const media_timed_event* event,
 				status_t err = fA2dp->StartStream();
 				if (err != B_OK)
 					TRACE("StartStream failed: %s\n", strerror(err));
+				else
+					TRACE("StartStream OK — streaming active\n");
 			}
 			break;
 		}
@@ -276,6 +278,17 @@ BluetoothAudioNode::DisposeInputCookie(int32 cookie)
 void
 BluetoothAudioNode::BufferReceived(BBuffer* buffer)
 {
+	static int sBufferCount = 0;
+	sBufferCount++;
+	if (sBufferCount <= 3 || (sBufferCount % 1000) == 0) {
+		TRACE("BufferReceived #%d: runState=%d a2dp=%p streaming=%d "
+			"size=%lu fmt=%d\n",
+			sBufferCount, RunState(), fA2dp,
+			fA2dp ? fA2dp->IsStreaming() : -1,
+			(unsigned long)buffer->SizeUsed(),
+			fInput.format.u.raw_audio.format);
+	}
+
 	if (RunState() != BMediaEventLooper::B_STARTED
 		|| fA2dp == NULL || !fA2dp->IsStreaming()) {
 		buffer->Recycle();
