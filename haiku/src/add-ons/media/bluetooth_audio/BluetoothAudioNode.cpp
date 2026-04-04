@@ -280,13 +280,21 @@ BluetoothAudioNode::BufferReceived(BBuffer* buffer)
 {
 	static int sBufferCount = 0;
 	sBufferCount++;
-	if (sBufferCount <= 3 || (sBufferCount % 1000) == 0) {
-		TRACE("BufferReceived #%d: runState=%d a2dp=%p streaming=%d "
-			"size=%lu fmt=%d\n",
-			sBufferCount, RunState(), fA2dp,
-			fA2dp ? fA2dp->IsStreaming() : -1,
-			(unsigned long)buffer->SizeUsed(),
-			fInput.format.u.raw_audio.format);
+
+	/* Direct file logging (bypasses cached TRACE file handle) */
+	if (sBufferCount <= 5 || (sBufferCount % 500) == 0) {
+		FILE* dbg = fopen("/tmp/bt_buffer.log", "a");
+		if (dbg) {
+			fprintf(dbg, "BufRecv #%d: run=%d a2dp=%p stream=%d "
+				"size=%lu fmt=%d rate=%.0f ch=%d\n",
+				sBufferCount, RunState(), fA2dp,
+				fA2dp ? (int)fA2dp->IsStreaming() : -1,
+				(unsigned long)buffer->SizeUsed(),
+				(int)fInput.format.u.raw_audio.format,
+				fInput.format.u.raw_audio.frame_rate,
+				(int)fInput.format.u.raw_audio.channel_count);
+			fclose(dbg);
+		}
 	}
 
 	if (RunState() != BMediaEventLooper::B_STARTED
@@ -306,7 +314,15 @@ BluetoothAudioNode::BufferReceived(BBuffer* buffer)
 		if (pcm != NULL) {
 			ConvertFloatToInt16(src, pcm, sampleCount, fVolume);
 			size_t framesPerChannel = sampleCount / raw.channel_count;
-			fA2dp->SendAudio(pcm, framesPerChannel);
+			status_t err = fA2dp->SendAudio(pcm, framesPerChannel);
+			if (sBufferCount <= 5) {
+				FILE* dbg = fopen("/tmp/bt_buffer.log", "a");
+				if (dbg) {
+					fprintf(dbg, "  SendAudio(%lu samples): %s\n",
+						(unsigned long)framesPerChannel, strerror(err));
+					fclose(dbg);
+				}
+			}
 			free(pcm);
 		}
 	} else {
