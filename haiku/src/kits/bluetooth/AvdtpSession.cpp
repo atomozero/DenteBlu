@@ -406,7 +406,11 @@ AvdtpSession::OpenMediaChannel(const bdaddr_t& remote)
 	if (fMediaSocket >= 0)
 		return B_BUSY;
 
-	/* Create second L2CAP socket for media transport */
+	/* Create L2CAP socket for media transport.
+	 * Ideally SOCK_SEQPACKET to preserve RTP packet boundaries,
+	 * but Haiku's L2CAP only supports SOCK_STREAM. Each send()
+	 * on SOCK_STREAM should still produce a separate L2CAP PDU
+	 * as long as we don't send faster than the link can transmit. */
 	fMediaSocket = socket(PF_BLUETOOTH, SOCK_STREAM,
 		BLUETOOTH_PROTO_L2CAP);
 	if (fMediaSocket < 0) {

@@ -76,24 +76,33 @@ BluetoothAudioNode::AddOn(int32* _internalId) const
 void
 BluetoothAudioNode::NodeRegistered()
 {
+	TRACE("NodeRegistered: enter\n");
+
+	TRACE("NodeRegistered: ControlPort\n");
 	fInput.destination.port = ControlPort();
 	fInput.destination.id = 0;
+	TRACE("NodeRegistered: Node()\n");
 	fInput.node = Node();
 	fInput.format.type = B_MEDIA_RAW_AUDIO;
 	fInput.format.u.raw_audio = media_raw_audio_format::wildcard;
 	strcpy(fInput.name, "Bluetooth Audio Input");
 
+	TRACE("NodeRegistered: SetPriority\n");
 	SetPriority(B_URGENT_PRIORITY);
+	TRACE("NodeRegistered: SetEventLatency\n");
 	SetEventLatency(kBluetoothLatency);
 
+	TRACE("NodeRegistered: _InitParameterWeb\n");
 	_InitParameterWeb();
 
+	TRACE("NodeRegistered: RunState=%d\n", RunState());
 	/* Run() starts the BMediaEventLooper control thread.
 	 * On some Haiku revisions (hrev59506+), the media_addon_server
 	 * starts the control loop before calling NodeRegistered(),
 	 * so Run() must only be called if the looper is not yet running. */
 	if (RunState() == B_UNREGISTERED)
 		Run();
+	TRACE("NodeRegistered: done\n");
 }
 
 
@@ -243,6 +252,9 @@ BluetoothAudioNode::AcceptFormat(const media_destination& destination,
 status_t
 BluetoothAudioNode::GetNextInput(int32* cookie, media_input* _input)
 {
+	TRACE("GetNextInput: cookie=%d port=%d id=%d connected=%d\n",
+		(int)*cookie, (int)fInput.destination.port,
+		fInput.destination.id, fInputConnected);
 	if (*cookie != 0)
 		return B_BAD_INDEX;
 
