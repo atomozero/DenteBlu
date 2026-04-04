@@ -28,9 +28,8 @@ BluetoothAudioAddOn::BluetoothAudioAddOn(image_id image)
 
 	fFlavorInfo.name = "Bluetooth Audio Output";
 	fFlavorInfo.info = "Sends audio to Bluetooth A2DP headphones";
-	fFlavorInfo.kinds = B_BUFFER_CONSUMER | B_CONTROLLABLE
-		| B_PHYSICAL_OUTPUT;
-	fFlavorInfo.flavor_flags = B_FLAVOR_IS_GLOBAL;
+	fFlavorInfo.kinds = B_BUFFER_CONSUMER | B_CONTROLLABLE;
+	fFlavorInfo.flavor_flags = 0;
 	fFlavorInfo.internal_id = 0;
 	fFlavorInfo.possible_count = 1;
 	fFlavorInfo.in_format_count = 1;

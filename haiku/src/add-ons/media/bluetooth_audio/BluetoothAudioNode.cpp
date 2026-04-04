@@ -345,7 +345,7 @@ BluetoothAudioNode::GetLatencyFor(const media_destination& forWhom,
 	bigtime_t* _latency, media_node_id* _timesource)
 {
 	*_latency = kBluetoothLatency;
-	*_timesource = TimeSource()->ID();
+	*_timesource = (TimeSource() != NULL) ? TimeSource()->ID() : 0;
 	return B_OK;
 }
 
