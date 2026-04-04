@@ -1227,6 +1227,12 @@ LocalDeviceImpl::InquiryResult(uint8* numberOfResponses, BMessage* request)
 	uint8 count = *numberOfResponses;
 	TRACE_BT("LocalDeviceImpl: %s #responses=%d\n", __FUNCTION__, count);
 
+	/* Bounds check: each standard inquiry response is 14 bytes
+	 * (6 bdaddr + 1 pscan_rep + 1 scan_period + 1 scan_mode +
+	 * 3 dev_class + 2 clock_offset). Clamp to prevent overflow. */
+	if (count > 20)
+		count = 20;
+
 	// Always dump discovered addresses for diagnostics
 	if (count > 0) {
 		bdaddr_t* addrs = (bdaddr_t*)(numberOfResponses + 1);
@@ -1278,6 +1284,8 @@ LocalDeviceImpl::InquiryResultWithRSSI(uint8* numberOfResponses, BMessage* reque
 {
 	uint8 count = *numberOfResponses;
 	TRACE_BT("LocalDeviceImpl: %s #responses=%d\n", __FUNCTION__, count);
+	if (count > 20)
+		count = 20;
 	if (count == 0 || request == NULL)
 		return;
 
