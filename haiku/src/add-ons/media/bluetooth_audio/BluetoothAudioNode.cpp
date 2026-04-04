@@ -179,8 +179,16 @@ BluetoothAudioNode::HandleEvent(const media_timed_event* event,
 		}
 
 		case BTimedEventQueue::B_HANDLE_BUFFER:
-			// handled directly in BufferReceived
+		{
+			BBuffer* buffer = const_cast<BBuffer*>(
+				(const BBuffer*)event->pointer);
+			if (buffer == NULL)
+				break;
+
+			_HandleBuffer(buffer);
+			buffer->Recycle();
 			break;
+		}
 
 		default:
 			break;
@@ -278,81 +286,60 @@ BluetoothAudioNode::DisposeInputCookie(int32 cookie)
 void
 BluetoothAudioNode::BufferReceived(BBuffer* buffer)
 {
-	static int sBufferCount = 0;
-	sBufferCount++;
+	/* Follow MultiAudioNode pattern: enqueue buffer in the event queue
+	 * and process it in HandleEvent(B_HANDLE_BUFFER). The media kit
+	 * framework expects this pattern for proper timing. */
+	if (buffer->Header()->type == B_MEDIA_RAW_AUDIO) {
+		media_timed_event event(buffer->Header()->start_time,
+			BTimedEventQueue::B_HANDLE_BUFFER, buffer,
+			BTimedEventQueue::B_RECYCLE_BUFFER);
+		status_t status = EventQueue()->AddEvent(event);
+		if (status != B_OK)
+			buffer->Recycle();
+	} else {
+		buffer->Recycle();
+	}
+}
 
-	/* Direct file logging (bypasses cached TRACE file handle) */
-	if (sBufferCount <= 5 || (sBufferCount % 500) == 0) {
+
+void
+BluetoothAudioNode::_HandleBuffer(BBuffer* buffer)
+{
+	if (fA2dp == NULL || !fA2dp->IsStreaming())
+		return;
+
+	static int sCount = 0;
+	sCount++;
+	if (sCount <= 3 || (sCount % 500) == 0) {
 		FILE* dbg = fopen("/tmp/bt_buffer.log", "a");
 		if (dbg) {
-			fprintf(dbg, "BufRecv #%d: run=%d a2dp=%p stream=%d "
-				"size=%lu fmt=%d rate=%.0f ch=%d\n",
-				sBufferCount, RunState(), fA2dp,
-				fA2dp ? (int)fA2dp->IsStreaming() : -1,
-				(unsigned long)buffer->SizeUsed(),
-				(int)fInput.format.u.raw_audio.format,
-				fInput.format.u.raw_audio.frame_rate,
-				(int)fInput.format.u.raw_audio.channel_count);
+			fprintf(dbg, "HandleBuffer #%d: size=%lu fmt=%d\n",
+				sCount, (unsigned long)buffer->SizeUsed(),
+				(int)fInput.format.u.raw_audio.format);
 			fclose(dbg);
 		}
 	}
 
-	if (RunState() != BMediaEventLooper::B_STARTED
-		|| fA2dp == NULL || !fA2dp->IsStreaming()) {
-		buffer->Recycle();
-		return;
-	}
-
 	size_t size = buffer->SizeUsed();
 	const media_raw_audio_format& raw = fInput.format.u.raw_audio;
+	uint32 channels = raw.channel_count;
+	if (channels == 0)
+		channels = 2;
 
 	if (raw.format == media_raw_audio_format::B_AUDIO_FLOAT) {
-		/* Converti float → int16 con volume e clamping */
 		const float* src = (const float*)buffer->Data();
 		size_t sampleCount = size / sizeof(float);
 		int16* pcm = (int16*)malloc(sampleCount * sizeof(int16));
 		if (pcm != NULL) {
 			ConvertFloatToInt16(src, pcm, sampleCount, fVolume);
-			size_t framesPerChannel = sampleCount / raw.channel_count;
-			status_t err = fA2dp->SendAudio(pcm, framesPerChannel);
-			if (sBufferCount <= 5) {
-				FILE* dbg = fopen("/tmp/bt_buffer.log", "a");
-				if (dbg) {
-					fprintf(dbg, "  SendAudio(%lu samples): %s\n",
-						(unsigned long)framesPerChannel, strerror(err));
-					fclose(dbg);
-				}
-			}
+			fA2dp->SendAudio(pcm, sampleCount / channels);
 			free(pcm);
 		}
 	} else {
-		/* Già int16 — applica solo volume se != 1.0 */
 		int16* pcm = (int16*)buffer->Data();
 		size_t sampleCount = size / sizeof(int16);
-
-		if (fVolume < 0.999f || fVolume > 1.001f) {
-			/* Copia per non modificare il buffer originale */
-			int16* tmp = (int16*)malloc(sampleCount * sizeof(int16));
-			if (tmp != NULL) {
-				for (size_t i = 0; i < sampleCount; i++) {
-					float s = pcm[i] * fVolume;
-					if (s > 32767.0f)
-						s = 32767.0f;
-					else if (s < -32767.0f)
-						s = -32767.0f;
-					tmp[i] = (int16)s;
-				}
-				size_t framesPerChannel = sampleCount / raw.channel_count;
-				fA2dp->SendAudio(tmp, framesPerChannel);
-				free(tmp);
-			}
-		} else {
-			size_t framesPerChannel = sampleCount / raw.channel_count;
-			fA2dp->SendAudio(pcm, framesPerChannel);
-		}
+		fA2dp->SendAudio(pcm, sampleCount / channels);
 	}
-
-	buffer->Recycle();
 }
 
 

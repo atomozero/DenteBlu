@@ -90,6 +90,7 @@ public:
 
 private:
 			void				_InitParameterWeb();
+			void				_HandleBuffer(BBuffer* buffer);
 			status_t			_ReadDeviceAddress(bdaddr_t* address);
 
 	enum {
