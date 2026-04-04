@@ -47,9 +47,13 @@ public:
 	/* Send PCM audio data to the headphones.
 	 * pcm: interleaved int16 PCM samples (host byte order).
 	 * sampleCount: number of samples PER CHANNEL.
-	 * Blocks until pacing delay is reached (maintains real-time). */
+	 * When pacing is enabled (default), blocks to maintain real-time.
+	 * Disable pacing when caller handles timing (e.g. media add-on). */
 	status_t					SendAudio(const int16* pcm,
 								    size_t sampleCount);
+
+	void						SetPacingEnabled(bool enabled)
+								    { fPacingEnabled = enabled; }
 
 	/* Stream info (valid after Connect) */
 	uint32						SampleRate() const;
@@ -83,6 +87,7 @@ private:
 	/* Pacing state */
 	bigtime_t					fStreamStartTime;
 	uint64						fTotalSamplesSent;
+	bool						fPacingEnabled;
 
 	/* Negotiated SBC parameters (set by _NegotiateCodec) */
 	uint32						fNegSampleRate;

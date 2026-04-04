@@ -144,6 +144,10 @@ BluetoothAudioNode::HandleEvent(const media_timed_event* event,
 					fA2dp = NULL;
 					break;
 				}
+				/* Media kit handles timing — disable internal pacing */
+				fA2dp->SetPacingEnabled(false);
+				TRACE("A2DP connected: %u Hz %u ch\n",
+					fA2dp->SampleRate(), fA2dp->Channels());
 			}
 			if (fA2dp != NULL && !fA2dp->IsStreaming()) {
 				status_t err = fA2dp->StartStream();
@@ -192,18 +196,22 @@ BluetoothAudioNode::AcceptFormat(const media_destination& destination,
 
 	media_raw_audio_format& raw = format->u.raw_audio;
 
-	/* frame rate: deve essere 44100 o wildcard */
+	/* Use the A2DP negotiated rate if available, otherwise 44100 */
+	float acceptRate = (fA2dp != NULL) ? (float)fA2dp->SampleRate() : 44100.0f;
+	uint32 acceptChannels = (fA2dp != NULL) ? fA2dp->Channels() : 2;
+
+	/* frame rate: deve essere il rate negoziato o wildcard */
 	if (raw.frame_rate != 0
 		&& raw.frame_rate != media_raw_audio_format::wildcard.frame_rate
-		&& raw.frame_rate != 44100.0f) {
+		&& raw.frame_rate != acceptRate) {
 		return B_MEDIA_BAD_FORMAT;
 	}
 
-	/* canali: deve essere 2 o wildcard */
+	/* canali: deve corrispondere al negoziato o wildcard */
 	if (raw.channel_count != 0
 		&& raw.channel_count
 			!= media_raw_audio_format::wildcard.channel_count
-		&& raw.channel_count != 2) {
+		&& raw.channel_count != acceptChannels) {
 		return B_MEDIA_BAD_FORMAT;
 	}
 
@@ -225,12 +233,12 @@ BluetoothAudioNode::AcceptFormat(const media_destination& destination,
 	/* Specializza i campi wildcard */
 	if (raw.frame_rate == 0
 		|| raw.frame_rate == media_raw_audio_format::wildcard.frame_rate) {
-		raw.frame_rate = 44100.0f;
+		raw.frame_rate = acceptRate;
 	}
 	if (raw.channel_count == 0
 		|| raw.channel_count
 			== media_raw_audio_format::wildcard.channel_count) {
-		raw.channel_count = 2;
+		raw.channel_count = acceptChannels;
 	}
 	if (raw.format == 0
 		|| raw.format == media_raw_audio_format::wildcard.format) {

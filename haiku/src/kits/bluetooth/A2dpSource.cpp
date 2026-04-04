@@ -60,6 +60,7 @@ A2dpSource::A2dpSource()
 	fSsrc(0x12345678),
 	fStreamStartTime(0),
 	fTotalSamplesSent(0),
+	fPacingEnabled(true),
 	fNegSampleRate(44100),
 	fNegChannels(2),
 	fNegBlocks(16),
@@ -373,8 +374,9 @@ A2dpSource::SendAudio(const int16* pcm, size_t sampleCount)
 		}
 	}
 
-	/* Pacing: sleep until we've reached the right wall-clock time */
-	if (fTotalSamplesSent > 0) {
+	/* Pacing: sleep until we've reached the right wall-clock time.
+	 * Disabled when caller handles timing (e.g. media add-on). */
+	if (fPacingEnabled && fTotalSamplesSent > 0) {
 		bigtime_t targetTime = fStreamStartTime
 			+ (fTotalSamplesSent * 1000000LL) / SampleRate();
 		bigtime_t now = system_time();
