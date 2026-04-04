@@ -154,7 +154,11 @@ main(int argc, char** argv)
 		decodedRate, decodedChannels, sampleRate);
 
 	int64 totalFrames = track->CountFrames();
-	float duration = (float)totalFrames / sampleRate;
+	float duration = (float)totalFrames / decodedRate;
+	/* When resampling, adjust totalFrames to the A2DP rate for
+	 * correct progress tracking (totalSent counts at A2DP rate) */
+	if (decodedRate != sampleRate)
+		totalFrames = (int64)((double)totalFrames * sampleRate / decodedRate);
 	printf("Duration: %.1f seconds\n", duration);
 	printf("Connected! Streaming audio...\n\n");
 
