@@ -328,12 +328,14 @@ AvdtpSession::Suspend(uint8 remoteSeid)
 
 	uint8 param = (remoteSeid << 2);
 	status_t err = _SendSignal(AVDTP_SUSPEND, &param, 1);
-	if (err != B_OK)
+	if (err != B_OK) {
+		TRACE_AVDTP("Suspend: SendSignal failed: %s\n", strerror(err));
 		return err;
+	}
 
 	uint8 buf[AVDTP_SIGNAL_BUF_SIZE];
 	ssize_t received = _RecvSignal(buf, sizeof(buf), 5000000);
-	if (received < AVDTP_HEADER_SIZE)
+	if (received < (ssize_t)AVDTP_HEADER_SIZE)
 		return B_TIMED_OUT;
 
 	uint8 msgType = AVDTP_GET_MSG_TYPE(buf[0]);
