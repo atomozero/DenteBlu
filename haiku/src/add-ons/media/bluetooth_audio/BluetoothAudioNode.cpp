@@ -200,24 +200,9 @@ BluetoothAudioNode::AcceptFormat(const media_destination& destination,
 
 	media_raw_audio_format& raw = format->u.raw_audio;
 
-	/* Use the A2DP negotiated rate if available, otherwise 44100 */
-	float acceptRate = (fA2dp != NULL) ? (float)fA2dp->SampleRate() : 44100.0f;
-	uint32 acceptChannels = (fA2dp != NULL) ? fA2dp->Channels() : 2;
-
-	/* frame rate: deve essere il rate negoziato o wildcard */
-	if (raw.frame_rate != 0
-		&& raw.frame_rate != media_raw_audio_format::wildcard.frame_rate
-		&& raw.frame_rate != acceptRate) {
-		return B_MEDIA_BAD_FORMAT;
-	}
-
-	/* canali: deve corrispondere al negoziato o wildcard */
-	if (raw.channel_count != 0
-		&& raw.channel_count
-			!= media_raw_audio_format::wildcard.channel_count
-		&& raw.channel_count != acceptChannels) {
-		return B_MEDIA_BAD_FORMAT;
-	}
+	/* Accept any frame rate and channel count — we'll handle
+	 * conversion in BufferReceived if needed.  Being too restrictive
+	 * prevents the mixer from connecting. */
 
 	/* formato campione: SHORT, FLOAT o wildcard */
 	if (raw.format != 0
@@ -237,12 +222,12 @@ BluetoothAudioNode::AcceptFormat(const media_destination& destination,
 	/* Specializza i campi wildcard */
 	if (raw.frame_rate == 0
 		|| raw.frame_rate == media_raw_audio_format::wildcard.frame_rate) {
-		raw.frame_rate = acceptRate;
+		raw.frame_rate = 44100.0f;
 	}
 	if (raw.channel_count == 0
 		|| raw.channel_count
 			== media_raw_audio_format::wildcard.channel_count) {
-		raw.channel_count = acceptChannels;
+		raw.channel_count = 2;
 	}
 	if (raw.format == 0
 		|| raw.format == media_raw_audio_format::wildcard.format) {
@@ -264,11 +249,17 @@ BluetoothAudioNode::AcceptFormat(const media_destination& destination,
 status_t
 BluetoothAudioNode::GetNextInput(int32* cookie, media_input* _input)
 {
-	TRACE("GetNextInput: cookie=%d port=%d id=%d connected=%d\n",
-		(int)*cookie, (int)fInput.destination.port,
-		fInput.destination.id, fInputConnected);
 	if (*cookie != 0)
 		return B_BAD_INDEX;
+
+	/* If a previous connection attempt left fInput.source in an
+	 * inconsistent state (node id 0 = invalid), reset it so the
+	 * input appears as free for new connections. */
+	if (fInput.source != media_source::null
+			&& fInput.source.id == 0) {
+		fInput.source = media_source::null;
+		fInputConnected = false;
+	}
 
 	*_input = fInput;
 	(*cookie)++;
