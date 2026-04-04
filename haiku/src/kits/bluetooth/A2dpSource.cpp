@@ -218,6 +218,8 @@ A2dpSource::Disconnect()
 	StopStream();
 
 	if (fAvdtp != NULL) {
+		/* Close may fail if remote already disconnected — ignore errors.
+		 * Disconnect() will close sockets regardless. */
 		if (fRemoteSeid != 0)
 			fAvdtp->Close(fRemoteSeid);
 		fAvdtp->Disconnect();

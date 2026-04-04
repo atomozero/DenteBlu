@@ -351,23 +351,40 @@ AvdtpSession::Suspend(uint8 remoteSeid)
 status_t
 AvdtpSession::Close(uint8 remoteSeid)
 {
-	if (fSignalingSocket < 0)
+	if (fSignalingSocket < 0) {
+		/* Socket already gone — just clean up media channel */
+		if (fMediaSocket >= 0) {
+			close(fMediaSocket);
+			fMediaSocket = -1;
+		}
 		return B_NO_INIT;
+	}
 
 	uint8 param = (remoteSeid << 2);
 	status_t err = _SendSignal(AVDTP_CLOSE, &param, 1);
-	if (err != B_OK)
+	if (err != B_OK) {
+		TRACE_AVDTP("Close: SendSignal failed: %s\n", strerror(err));
+		/* Remote likely disconnected — close media channel anyway */
+		if (fMediaSocket >= 0) {
+			close(fMediaSocket);
+			fMediaSocket = -1;
+		}
 		return err;
+	}
 
 	uint8 buf[AVDTP_SIGNAL_BUF_SIZE];
 	ssize_t received = _RecvSignal(buf, sizeof(buf), 5000000);
-	if (received < AVDTP_HEADER_SIZE)
+	if (received < (ssize_t)AVDTP_HEADER_SIZE) {
+		if (fMediaSocket >= 0) {
+			close(fMediaSocket);
+			fMediaSocket = -1;
+		}
 		return B_TIMED_OUT;
+	}
 
 	uint8 msgType = AVDTP_GET_MSG_TYPE(buf[0]);
 	if (msgType != AVDTP_MSG_TYPE_RESPONSE_ACCEPT) {
 		TRACE_AVDTP("Close rejected\n");
-		return B_ERROR;
 	}
 
 	/* Close media channel */
