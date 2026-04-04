@@ -92,9 +92,13 @@ BluetoothAudioNode::NodeRegistered()
 	TRACE("NodeRegistered: SetEventLatency\n");
 	SetEventLatency(kBluetoothLatency);
 
-	/* _InitParameterWeb() deferred — calling SetParameterWeb from
-	 * NodeRegistered can crash in some Haiku revisions due to vtable
-	 * thunking issues with multiple inheritance in media add-ons. */
+	/* InitParameterWeb MUST be called BEFORE Run().
+	 * If called after Run(), the ControlLoop thread handles incoming
+	 * messages that trigger SetParameterWeb through BControllable
+	 * vtable dispatch before the node is fully initialized, causing
+	 * pointer truncation crashes in media_destination::operator=. */
+	TRACE("NodeRegistered: _InitParameterWeb\n");
+	_InitParameterWeb();
 
 	TRACE("NodeRegistered: RunState=%d\n", RunState());
 	/* Run() starts the BMediaEventLooper control thread.
@@ -112,8 +116,7 @@ BluetoothAudioNode::HandleMessage(int32 message, const void* data,
 	size_t size)
 {
 	if (BBufferConsumer::HandleMessage(message, data, size) == B_OK
-		|| BControllable::HandleMessage(message, data, size) == B_OK
-		|| BMediaEventLooper::HandleMessage(message, data, size) == B_OK) {
+		|| BControllable::HandleMessage(message, data, size) == B_OK) {
 		return B_OK;
 	}
 	return BMediaNode::HandleMessage(message, data, size);
