@@ -4,3 +4,7 @@ build-tmp/
 build/
 tmp/
 *.o
+
+# Test binaries accidentally left in source tree
+haiku/src/tests/kits/bluetooth/bt_a2dp_source_test
+haiku/src/tests/kits/bluetooth/bt_query
