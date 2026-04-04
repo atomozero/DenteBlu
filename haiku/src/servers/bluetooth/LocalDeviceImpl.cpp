@@ -1442,8 +1442,33 @@ LocalDeviceImpl::ConnectionRequest(struct hci_ev_conn_request* event,
 		}
 	}
 
-	// TODO: add a possible request in the queue
-	if (true) { // Check Preferences if we are to accept this connection
+	/* Accept connections only from paired devices (have a link key)
+	 * or from devices where we initiated the connection.
+	 * Reject unknown devices to prevent crashes from malformed events. */
+	bool accept = false;
+	if (fKeyStore != NULL) {
+		linkkey_t key;
+		uint8 type;
+		accept = fKeyStore->FindLinkKey(event->bdaddr, &key, &type);
+	}
+	if (!accept) {
+		/* Also accept if there's a pending outgoing connection
+		 * (e.g. from Pair button or A2dpSource::Connect) */
+		accept = (request != NULL);
+	}
+	if (!accept) {
+		TRACE_BT("LocalDeviceImpl: Rejecting connection from unknown "
+			"device %s\n", bdaddrUtils::ToString(event->bdaddr).String());
+		command = buildRejectConnectionRequest(event->bdaddr, &size);
+		if (command != NULL) {
+			if (fHCIDelegate->IssueCommand(command, size) == B_OK)
+				TRACE_BT("LocalDeviceImpl: Reject sent\n");
+			free(command);
+		}
+		return;
+	}
+
+	if (accept) {
 
 		// Keep ourselves as slave
 		command = buildAcceptConnectionRequest(event->bdaddr, 0x01 , &size);
