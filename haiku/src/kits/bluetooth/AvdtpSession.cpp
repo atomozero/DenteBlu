@@ -333,8 +333,12 @@ AvdtpSession::Suspend(uint8 remoteSeid)
 		return err;
 	}
 
+	/* If the remote already disconnected, recv may crash or block
+	 * indefinitely.  Use a short timeout and handle errors. */
 	uint8 buf[AVDTP_SIGNAL_BUF_SIZE];
-	ssize_t received = _RecvSignal(buf, sizeof(buf), 5000000);
+	ssize_t received = _RecvSignal(buf, sizeof(buf), 2000000);
+	if (received <= 0)
+		return B_TIMED_OUT;
 	if (received < (ssize_t)AVDTP_HEADER_SIZE)
 		return B_TIMED_OUT;
 
@@ -503,6 +507,9 @@ AvdtpSession::_SendSignal(uint8 signalId, const uint8* params,
 ssize_t
 AvdtpSession::_RecvSignal(uint8* buf, size_t maxLen, bigtime_t timeout)
 {
+	if (fSignalingSocket < 0)
+		return -1;
+
 	/* Set receive timeout */
 	struct timeval tv;
 	tv.tv_sec = timeout / 1000000;
