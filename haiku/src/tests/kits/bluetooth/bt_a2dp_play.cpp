@@ -185,8 +185,28 @@ main(int argc, char** argv)
 	int64 totalSent = 0;
 	int lastPercent = -1;
 
-	/* Volume boost for quiet tracks */
-	float gain = 4.0f; /* +12dB */
+	/* Auto-normalize: scan first buffer to find peak, then compute
+	 * gain to reach ~80% of full scale.  This handles both 8-bit WAV
+	 * files (samples are multiples of 256) and quiet recordings. */
+	float gain = 1.0f;
+	{
+		int16 scanBuf[8192];
+		int64 scanFrames = 4096;
+		int64 savedPos = track->CurrentFrame();
+		track->ReadFrames(scanBuf, &scanFrames);
+		track->SeekToFrame(&savedPos);
+
+		int16 peak = 0;
+		for (int64 i = 0; i < scanFrames * channels; i++) {
+			int16 abs = scanBuf[i] < 0 ? -scanBuf[i] : scanBuf[i];
+			if (abs > peak) peak = abs;
+		}
+		if (peak > 0 && peak < 26000) {
+			gain = 26000.0f / (float)peak;
+			printf("Auto-gain: peak=%d, gain=%.1fx (+%.0f dB)\n",
+				peak, gain, 20.0f * log10f(gain));
+		}
+	}
 
 	/* Resampling: if the decoder provides a different rate than A2DP
 	 * needs, we resample with linear interpolation */
