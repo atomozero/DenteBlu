@@ -162,20 +162,19 @@ main(int argc, char** argv)
 	size_t spf = source.SamplesPerFrame();
 	if (spf == 0) spf = 128;
 
-	/* Use buffer_size from the decoder if available, otherwise
-	 * default to 5 SBC frames worth of PCM */
-	size_t bufSize = decodedFormat.u.raw_audio.buffer_size;
-	if (bufSize == 0)
-		bufSize = spf * 5 * channels * sizeof(int16);
+	/* Read buffer: large enough for the decoder's preferred buffer size */
+	size_t decoderBufSize = decodedFormat.u.raw_audio.buffer_size;
+	if (decoderBufSize == 0)
+		decoderBufSize = 4096;
+	size_t bufSamples = decoderBufSize / (channels * sizeof(int16));
+	if (bufSamples < spf) bufSamples = spf;
+	size_t bufSize = bufSamples * channels * sizeof(int16);
 
-	/* Round down to a multiple of one SBC frame's PCM size
-	 * so SendAudio always gets complete frames */
-	size_t sbcPcmSize = spf * channels * sizeof(int16);
-	bufSize = (bufSize / sbcPcmSize) * sbcPcmSize;
-	if (bufSize < sbcPcmSize)
-		bufSize = sbcPcmSize;
-
-	size_t bufSamples = bufSize / (channels * sizeof(int16));
+	/* Send chunk: exactly 4 SBC frames per SendAudio call — same as
+	 * the working tone test.  This produces 1 RTP packet per call
+	 * with consistent ~11ms pacing.  Larger/variable chunks cause
+	 * burst sending that some receivers (Google Home) reject. */
+	size_t sendChunk = spf * 4;
 	int16* pcmBuf = (int16*)malloc(bufSize);
 	if (pcmBuf == NULL) {
 		source.Disconnect();
@@ -218,70 +217,84 @@ main(int argc, char** argv)
 			decodedRate, sampleRate, resampleRatio);
 	}
 
-	/* Resampled output buffer (larger if upsampling) */
-	size_t resampledMaxSamples = (size_t)(bufSamples * resampleRatio) + 128;
-	int16* resampledBuf = needResample
-		? (int16*)malloc(resampledMaxSamples * channels * sizeof(int16))
-		: NULL;
+	/* Intermediate buffer for resampled/processed audio */
+	size_t procMaxSamples = (size_t)(bufSamples * resampleRatio) + 256;
+	int16* procBuf = (int16*)malloc(procMaxSamples * channels * sizeof(int16));
+	size_t procAvail = 0; /* samples available in procBuf */
 
 	while (!sQuit) {
-		int64 framesToRead = bufSamples;
-		err = track->ReadFrames(pcmBuf, &framesToRead);
-		if (err != B_OK || framesToRead <= 0)
-			break;
+		/* Read from decoder when procBuf needs more data */
+		if (procAvail < sendChunk) {
+			int64 framesToRead = bufSamples;
+			err = track->ReadFrames(pcmBuf, &framesToRead);
+			if ((err != B_OK && err != (status_t)0x80004007)
+					|| framesToRead <= 0)
+				break;
 
-		/* Apply gain with clipping */
-		for (int64 i = 0; i < framesToRead * channels; i++) {
-			int32 sample = (int32)(pcmBuf[i] * gain);
-			if (sample > 32767) sample = 32767;
-			if (sample < -32768) sample = -32768;
-			pcmBuf[i] = (int16)sample;
-		}
-
-		int16* sendBuf = pcmBuf;
-		size_t sendSamples = (size_t)framesToRead;
-
-		/* Resample if needed (linear interpolation) */
-		if (needResample && resampledBuf != NULL) {
-			size_t outSamples = (size_t)(framesToRead * resampleRatio);
-			if (outSamples > resampledMaxSamples)
-				outSamples = resampledMaxSamples;
-
-			for (size_t i = 0; i < outSamples; i++) {
-				double srcPos = (double)i / resampleRatio;
-				size_t idx = (size_t)srcPos;
-				double frac = srcPos - idx;
-
-				if (idx + 1 >= (size_t)framesToRead)
-					idx = (size_t)framesToRead - 2;
-
-				for (uint8 ch = 0; ch < channels; ch++) {
-					int32 s0 = pcmBuf[idx * channels + ch];
-					int32 s1 = pcmBuf[(idx + 1) * channels + ch];
-					resampledBuf[i * channels + ch]
-						= (int16)(s0 + (int32)((s1 - s0) * frac));
-				}
+			/* Apply gain with clipping */
+			for (int64 i = 0; i < framesToRead * channels; i++) {
+				int32 sample = (int32)(pcmBuf[i] * gain);
+				if (sample > 32767) sample = 32767;
+				if (sample < -32768) sample = -32768;
+				pcmBuf[i] = (int16)sample;
 			}
 
-			sendBuf = resampledBuf;
-			sendSamples = outSamples;
+			/* Resample if needed */
+			if (needResample) {
+				size_t outSamples = (size_t)(framesToRead * resampleRatio);
+				if (procAvail + outSamples > procMaxSamples)
+					outSamples = procMaxSamples - procAvail;
+
+				for (size_t i = 0; i < outSamples; i++) {
+					double srcPos = (double)i / resampleRatio;
+					size_t idx = (size_t)srcPos;
+					double frac = srcPos - idx;
+					if (idx + 1 >= (size_t)framesToRead)
+						idx = (size_t)framesToRead - 2;
+					for (uint8 ch = 0; ch < channels; ch++) {
+						int32 s0 = pcmBuf[idx * channels + ch];
+						int32 s1 = pcmBuf[(idx + 1) * channels + ch];
+						procBuf[(procAvail + i) * channels + ch]
+							= (int16)(s0 + (int32)((s1 - s0) * frac));
+					}
+				}
+				procAvail += outSamples;
+			} else {
+				memcpy(procBuf + procAvail * channels,
+					pcmBuf, framesToRead * channels * sizeof(int16));
+				procAvail += framesToRead;
+			}
 		}
 
-		/* Diagnostic: dump first PCM samples to verify data is non-zero */
+		/* Send exactly sendChunk samples (= 4 SBC frames) */
+		size_t toSend = sendChunk;
+		if (toSend > procAvail)
+			toSend = procAvail;
+		if (toSend == 0)
+			break;
+
+		/* Diagnostic: dump first samples */
 		if (totalSent == 0) {
-			fprintf(stderr, "First PCM samples (after processing): ");
-			for (int d = 0; d < 16 && d < (int)(sendSamples * channels); d++)
-				fprintf(stderr, "%d ", sendBuf[d]);
+			fprintf(stderr, "First PCM samples: ");
+			for (int d = 0; d < 16 && d < (int)(toSend * channels); d++)
+				fprintf(stderr, "%d ", procBuf[d]);
 			fprintf(stderr, "\n");
 		}
 
-		err = source.SendAudio(sendBuf, sendSamples);
+		err = source.SendAudio(procBuf, toSend);
 		if (err != B_OK) {
 			printf("\nSendAudio failed: %s\n", strerror(err));
 			break;
 		}
 
-		totalSent += framesToRead;
+		/* Shift remaining data in procBuf */
+		procAvail -= toSend;
+		if (procAvail > 0) {
+			memmove(procBuf, procBuf + toSend * channels,
+				procAvail * channels * sizeof(int16));
+		}
+
+		totalSent += toSend;
 
 		/* Progress */
 		int percent = (totalFrames > 0)
@@ -300,7 +313,7 @@ main(int argc, char** argv)
 		(float)totalSent / sampleRate);
 
 	free(pcmBuf);
-	free(resampledBuf);
+	free(procBuf);
 	source.StopStream();
 	source.Disconnect();
 	return 0;
